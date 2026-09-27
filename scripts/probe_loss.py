@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Experiment D: flow-matching loss vs sigma, and the sigma = 1 floor D = mean_elements E_c[Var(x0 | c)].
+"""Analysis D: held-out loss vs sigma, and the sigma = 1 floor D = E_c[Var(x0 | c)].
+
+Deck: p.10 (Sigma sweep of the x0 guess) <- vis, p.11 (loss = x0 error x 1/sigma^2) <- measure.
+Needs one CUDA GPU with >= 40 GB; figures with scripts/plot_probe.py (CPU).
 
 measure
   Part 1 (VAE only): D per task in the exact training latent space.
@@ -11,12 +14,13 @@ measure
     extra noise draws) at sigma in SIGMAS, for the base model and optionally a LoRA.
 vis
   For one rot90 and one next sample: x_t decoded through the VAE, the one-step guess x0' = x_t - sigma * v'
-  decoded, and the per-sample v-loss / x0-error (x0-error = sigma^2 * v-loss) at several sigmas.
+  decoded, and the per-sample v-loss / x0-error (x0-error = sigma^2 * v-loss) at --sigmas (the deck uses
+  0.1, 0.5, 0.95, 0.99, 1.0); at the last sigma, --extra more noise draws (x0' only) show how the guess varies.
 
 Usage:
-  python scripts/probe_loss.py measure --model MODEL_DIR [--lora LORA_DIR] --out outputs/probe
+  python scripts/probe_loss.py measure --model MODEL_DIR --lora LORA_DIR --out outputs/probe
   python scripts/probe_loss.py vis --model MODEL_DIR --lora LORA_DIR --out outputs/probe/vis
-Then: python scripts/plot_probe.py --src outputs/probe
+Then: python scripts/plot_probe.py --src outputs/probe --vis outputs/probe/vis
 """
 import argparse
 import copy
@@ -32,7 +36,6 @@ from qie_mnist import data as D
 from qie_mnist.probe import LatentEncoder, fixed_noise, forward_v, probe_loss
 
 SIGMAS = [0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 0.99, 1.0]
-VIS_SIGMAS = [0.1, 0.3, 0.5, 0.7, 0.9]
 N_VAL = 16
 DEV = "cuda"
 BF16 = torch.bfloat16
@@ -201,7 +204,8 @@ def cmd_vis(a):
     pipe.set_progress_bar_config(disable=True)
     if a.lora:
         pipe.load_lora_weights(a.lora)
-    P = prepare_probe(pipe, 1)
+    sigmas = [float(x) for x in a.sigmas.split(",")]
+    P = prepare_probe(pipe, 1 + a.extra)  # noise draw 0 = the training probe's noise; draws 1.. only for the extras
     enc, tr = P["enc"], pipe.transformer.eval()
 
     def save(name, lat):
@@ -224,7 +228,7 @@ def cmd_vis(a):
         save(f"{tag}_ref", P["cond"][idx])
         save(f"{tag}_x0", P["tgt"][idx])
         r = dict(idx=idx, task=task, prompt=s["prompt"], src_label=s["src_label"], want_label=s["want_label"], sigma={})
-        for sg in VIS_SIGMAS:
+        for sg in sigmas:
             pred, xt = forward_v(tr, x0, cond, noise, emb, pad, sg, DEV)
             pred = pred.float()
             vl = ((pred - (noise - x0).float()) ** 2).reshape(len(gi), -1).mean(1)
@@ -235,6 +239,16 @@ def cmd_vis(a):
             save(f"{tag}_xt_{sg}", xt[j:j + 1])
             save(f"{tag}_x0hat_{sg}", x0p[j:j + 1])
             log(f"{tag} sigma {sg}: v-loss {vl[j].item():.4f} x0-err {x0e[j].item():.5f}")
+        sg = sigmas[-1]
+        r["extra"] = {}
+        for k in range(1, 1 + a.extra):
+            nz = torch.cat([P["noise"][k][i] for i in gi])
+            pred, xt = forward_v(tr, x0, cond, nz, emb, pad, sg, DEV)
+            x0p = xt.float() - sg * pred.float()
+            x0e = ((x0p - x0.float()) ** 2).reshape(len(gi), -1).mean(1)
+            r["extra"][f"{sg}_s{k}"] = dict(x0_err=x0e[j].item())
+            save(f"{tag}_x0hat_{sg}_s{k}", x0p[j:j + 1])
+            log(f"{tag} sigma {sg} draw {k}: x0-err {x0e[j].item():.5f}")
         rec[tag] = r
     json.dump(rec, open(os.path.join(a.out, "vis_numbers.json"), "w"), indent=1, ensure_ascii=False)
     log(f"wrote {a.out}")
@@ -243,19 +257,21 @@ def cmd_vis(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    m = sub.add_parser("measure")
+    m = sub.add_parser("measure", help="Part 1 (D) + Part 2 (probe loss vs sigma)")
     m.add_argument("--model", required=True)
     m.add_argument("--lora", default=None, help="LoRA dir or .safetensors (optional)")
     m.add_argument("--out", default="outputs/probe")
     m.add_argument("--n-seeds", type=int, default=4)
     m.add_argument("--n-train-per-class", type=int, default=200)
     m.add_argument("--n-test-per-class", type=int, default=100)
-    v = sub.add_parser("vis")
+    v = sub.add_parser("vis", help="x_t / x0' thumbnails across sigma for two samples")
     v.add_argument("--model", required=True)
     v.add_argument("--lora", default=None)
     v.add_argument("--out", default="outputs/probe/vis")
     v.add_argument("--ids", default="11,7", help="indices into make_pairs('test', 16): a rot90 and a next sample")
     v.add_argument("--px", type=int, default=160)
+    v.add_argument("--sigmas", default="0.1,0.5,0.95,0.99,1.0", help="comma-separated sigmas (the deck uses the default)")
+    v.add_argument("--extra", type=int, default=3, help="extra noise draws at the last sigma (x0' only)")
     a = ap.parse_args()
     cmd_measure(a) if a.cmd == "measure" else cmd_vis(a)
 

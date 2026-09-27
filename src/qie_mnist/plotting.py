@@ -1,4 +1,5 @@
-"""Shared matplotlib style for the figure scripts (white background, one accent colour, CJK-capable fonts)."""
+"""Shared matplotlib style for the figure scripts: white background, one accent colour, CJK-capable fonts
+(the figure labels are Chinese, matching deck/media)."""
 from __future__ import annotations
 
 from pathlib import Path

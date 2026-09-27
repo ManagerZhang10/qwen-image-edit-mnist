@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Experiment A: tensor trace of one real Qwen-Image 2.1 editing forward pass (MNIST rot90, 512x512).
+"""Analysis A: tensor trace of one real edit forward pass (digit 5 + "rotate 90 degrees clockwise", 512x512, 40 steps).
+
+Deck: p.4 (Tensor flow), p.5 (Two preprocessing paths for the reference image), p.6 (Block-causal attention);
+figures with scripts/plot_trace.py. Needs one CUDA GPU with >= 40 GB (peak 33 GiB).
+
+Experiment A: tensor trace of one real Qwen-Image 2.1 editing forward pass (MNIST rot90, 512x512).
 
 Mirrors diffusers QwenImage21Pipeline.__call__ (commit e0abab83, pipeline_qwenimage21.py) step by step,
 calling the pipeline's own helpers, and records shape / dtype / stats at every stage. Transformer

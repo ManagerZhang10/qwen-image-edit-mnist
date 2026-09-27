@@ -1,4 +1,6 @@
-"""Scoring for the MNIST editing tasks.
+"""Edit success rate and pixel IoU. Deck: p.12 (How success is scored). Used by training validation, sweeps and plots.
+
+Scoring for the MNIST editing tasks.
 
 The edited output is resized back to 28x28 grayscale, the edit is undone (rotate back / invert back) and a
 small CNN classifies the result. Success = predicted label equals the expected label. Deterministic tasks

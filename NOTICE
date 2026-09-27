@@ -19,8 +19,9 @@ Version 2.0. The upstream license header is kept verbatim at the top of the file
 edited here).
 
 Modifications (the only changes to the upstream file; full diff in
-train/hooks.patch, 4 call sites, no change to the training logic):
+train/hooks.patch):
 
+  Hooks 1-4 (4 call sites; they do not change what is trained):
   1. After the prompt-embedding cache is filled, and before the text encoder
      and VAE are freed: `train_hooks.prepare(...)` encodes a fixed held-out test
      set (prompt embeddings, target / condition latents, fixed noise).
@@ -30,6 +31,11 @@ train/hooks.patch, 4 call sites, no change to the training logic):
      lr and the sampled sigma to train.jsonl.
   4. After every optimizer step: `train_hooks.on_step(step, ...)` runs the
      periodic held-out probe loss, validation sampling, and LoRA snapshot.
+
+  Patch 5 (optional training change, off by default):
+  5. A new argument `--train_shift` (default 1.0 = upstream behaviour). When it
+     is s != 1, each sampled training sigma is mapped to s*sigma/(1+(s-1)*sigma)
+     before noising, and the timestep follows the shifted sigma (experiment E).
 
 The hooks live in train/train_hooks.py (original code of this project). They only
 read the model in eval mode under torch.no_grad and write logs / images / LoRA files.

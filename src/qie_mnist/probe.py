@@ -1,4 +1,6 @@
-"""Held-out flow-matching loss at fixed sigmas ("probe loss"), shared by the training hooks and probe_loss.py.
+"""Probe loss on the fixed test set at fixed sigmas and noise. Deck: p.9 (Loss by sigma), p.11 (loss = x0 error x 1/sigma^2).
+
+Held-out flow-matching loss at fixed sigmas ("probe loss"), shared by the training hooks and probe_loss.py.
 
 Convention (diffusers FlowMatchEulerDiscreteScheduler / Qwen-Image):
     x_t = (1 - sigma) * x0 + sigma * noise,   v = noise - x0,   loss = mean((v_pred - v)^2)

@@ -1,239 +1,401 @@
 # qwen-image-edit-mnist
 
-**English summary.** A small, fully reproducible practice experiment on the **Qwen-Image 2.1** image-editing
-model, using four synthetic MNIST edits: rotate 90°, rotate 180°, "next digit" and invert. It contains:
-(A) a tensor-level trace of one real edit forward pass, (B) LoRA fine-tuning with the official diffusers
-img2img trainer (vendored, Apache-2.0, plus 4 logging hooks), (C) inference sweeps over steps / CFG / shift /
-KV cache / causal_condition / resolution / LoRA scale, and (D) an analysis of the loss vs noise level σ and the
-σ = 1 loss floor. Main findings: a rank-32 LoRA trained for 3000 steps on 2000 pairs learns the deterministic
-edits (rotations 100 %, invert 94 %, IoU 0.94–0.99) and after fine-tuning they work in 4 sampling steps. "Next
-digit" has no unique answer and stays at 12–31 %. Training ran on 1× H100 80GB in about 1.4 GPU-hours. **No
-weights are included.** The base model is under the qwen-research license, and the trained LoRA is not
-released. The documentation below is in Chinese.
+**Summary.** A small, fully reproducible practice project on the **Qwen-Image 2.1** image-editing model
+(~16B parameters), built on four synthetic MNIST edits: rotate 90°, rotate 180°, "next digit" and invert. It walks
+through one real model end to end: (A) a tensor-level trace of one edit forward pass, (B) LoRA fine-tuning with the
+official diffusers img2img trainer (vendored, Apache-2.0, plus logging hooks), (C) inference sweeps over CFG /
+shift / steps / LoRA scale, (D) loss vs noise level σ and the σ = 1 floor, and two training variants, (E) train-time
+σ shift and (F) fixed "next" targets. A rank-32 LoRA trained for 3000 steps on 2000 pairs (1× H100, ~1.4 GPU-hours)
+learns the deterministic edits (rotations 100 %, invert 94 %, IoU 0.94–0.99), and after fine-tuning they work in
+2 sampling steps. "Next digit" stays at 6–31 %, and neither variant fixes it. Every script is tied to a page of the
+Chinese lecture deck in `deck/`. **No weights are included**: the base model is under the qwen-research license and
+the trained LoRA is not released.
 
 ---
 
-## 讲解 deck
+## What this project teaches
 
-中文讲解幻灯片在 [`deck/practice.html`](deck/practice.html)（下载后用 Chrome 打开），说明见 [`deck/README.md`](deck/README.md)。
+It takes a task small enough to see completely and walks one real instruction-editing model through it end to end:
+how the data is built, what one training step computes, how tensors flow through the model, what the training loss
+says once it is split by task and by σ, how the success rate is scored, and what CFG / shift / steps / LoRA scale
+each control at inference time. Three of the four tasks have a unique answer (the rotations and invert) and one does
+not (the "next digit" target is another writer's n+1), and the contrast between what can and cannot be learned runs
+through the whole project.
 
-## 这个项目展示什么
+The companion lecture is [`deck/practice.html`](deck/practice.html) (19 slides in Chinese; download and open in
+Chrome, `←` / `→` to navigate, see [`deck/README.md`](deck/README.md)). The table
+"[Deck page → script → result file](#deck-page--script--result-file)" below maps every page to the scripts and data
+in this repo; open the deck and follow it page by page alongside the code.
 
-用一个小到能完全看清楚的任务，把一个真实的指令编辑模型（Qwen-Image 2.1，约 16B 参数）从头到尾走一遍：
-
-| 部分 | 内容 | 入口 |
+| Experiment | Content | Entry point |
 | --- | --- | --- |
-| A 前向追踪 | 一次真实编辑前向的每一步：图像预处理、VAE、token 打包、文本编码、联合序列、块因果 mask、RoPE、调制、KV 缓存、Euler 更新；手写的镜像循环和真实 `pipe(...)` 逐像素一致 | `scripts/trace_forward.py` |
-| B LoRA 训练 | diffusers 官方 img2img LoRA 脚本原样使用，只加 4 个只读挂钩：记录每步 σ、固定测试集 probe loss、定期验证 | `scripts/train_lora.sh` |
-| C 推理扫描 | 步数、CFG、shift、KV 缓存、causal_condition、分辨率、LoRA scale 对成功率、画质、耗时的影响 | `scripts/infer.py sweep` |
-| D loss 与 σ | 每个任务 loss 随 σ 的变化，以及 σ = 1 处的理论下界 D = E_c[Var(x0 \| c)] | `scripts/probe_loss.py` |
+| A forward trace | Every step of one real edit forward pass: preprocessing, VAE, token packing, text encoding, joint sequence, block-causal mask, RoPE, modulation, KV cache, Euler update; the hand-written mirror loop matches the real `pipe(...)` pixel for pixel | `scripts/trace_forward.py` |
+| B LoRA training | The official diffusers img2img LoRA trainer with read-only hooks only: per-step σ, held-out probe loss, periodic validation | `scripts/train_lora.sh` |
+| C inference sweeps | Phase 1 base model, phase 2 LoRA scale, phase 3 CFG / shift / steps with the LoRA + per-step x0′ trace | `scripts/infer.py sweep` |
+| D loss and σ | Loss vs σ per task, the σ = 1 floor D = E_c[Var(x0 \| c)], v loss = x0 error × 1/σ² | `scripts/probe_loss.py` |
+| E train-time σ shift | Same as B, but each training σ is mapped to 5σ/(1+4σ), so a third of the steps land at σ > 0.9 | `train_lora.sh --train-shift 5` |
+| F fixed next prototypes | Same as B, but the next target is one fixed prototype per digit (a unique answer) | `prepare_data.py --next-target proto` |
 
-![四个任务](figures/qi21_tasks.png)
+![The four tasks](deck/media/qi21_tasks.png)
 
-## 四个任务和固定指令
+## The four tasks and their fixed instructions
 
-| 任务 | 指令（固定中文） | 目标 | 答案唯一？ |
+| Task | Instruction (fixed, Chinese) | Target | Unique answer? |
 | --- | --- | --- | --- |
-| `rot90` | 把图片顺时针旋转 90 度 | 参考图顺时针转 90° | 是 |
-| `rot180` | 把图片旋转 180 度 | 参考图转 180° | 是 |
-| `next` | 把数字换成下一个数字，9 变成 0 | **另一个人写的** n+1（按种子从同一 split 里抽） | 否 |
-| `invert` | 把图片黑白反色 | 255 − 参考图 | 是 |
+| `rot90` | 把图片顺时针旋转 90 度 ("Rotate the image 90 degrees clockwise") | reference rotated 90° clockwise | yes |
+| `rot180` | 把图片旋转 180 度 ("Rotate the image 180 degrees") | reference rotated 180° | yes |
+| `next` | 把数字换成下一个数字，9 变成 0 ("Replace the digit with the next digit; 9 becomes 0") | **another writer's** n+1 (drawn by seed from the same split); a fixed prototype with `--next-target proto` | no (yes with proto) |
+| `invert` | 把图片黑白反色 ("Invert black and white") | 255 − reference | yes |
 
-28×28 灰度图用双三次插值放大到 512×512 RGB。评测时把输出缩回 28×28，先做逆变换（转回来、反色回来），
-再用一个自训练的小 CNN（`src/qie_mnist/assets/mnist_cls.pt`，1.6 MB，MNIST 测试集准确率 98.8%）分类。
-「成功」指分类结果等于期望标签。确定性任务另外报告和标准答案的像素 IoU。
+The 28×28 grayscale digits are upsampled bicubically to 512×512 RGB. The training set `make_pairs('train', 500)` has
+2000 pairs and the test set `make_pairs('test', 16)` has 64 (**16 per task**). For scoring, the output is resized
+back to 28×28, the edit is undone (rotated back, inverted back), and a small self-trained CNN
+(`src/qie_mnist/assets/mnist_cls.pt`, 1.6 MB, 98.8% MNIST test accuracy) classifies it; the edit succeeds when the
+predicted digit equals the expected one. Deterministic tasks also report the pixel IoU against the ground truth.
+**With only 16 images per task, one image is 6.25 percentage points**, so differences of a few points are noise.
 
-**需要说清楚的限制：每个任务只有一条固定指令模板，没有任何改写或同义扩充。** 训练集 2000 对样本只用了
-4 句话，所以模型学到的是「这 4 句话 → 这 4 种变换」，不能说明它能听懂换一种说法的指令。真实的编辑数据需要
-人写的指令，或用 LLM 扩充改写，并且要覆盖更多样的说法。
+## Layout
 
-## 硬件与耗时
+```text
+src/qie_mnist/        data.py      tasks, fixed instructions, pair synthesis (random / proto next targets, task subsets)
+                      evaluate.py  classifier, undo, success rate, IoU
+                      probe.py     flow-matching loss at fixed σ / fixed noise (shared by the hooks and experiment D)
+                      plotting.py  figure style (white background, one accent colour, CJK fonts)
+                      assets/mnist_cls.pt  self-trained classifier (regenerate with scripts/train_classifier.py)
+scripts/              prepare_data.py      step 1  data
+                      train_lora.sh        step 2  training (B / E / F / task subset)
+                      infer.py             step 3  single edit / inference sweeps (C phases 1-3)
+                      summarize_results.py step 4  print the result JSON as the tables below
+                      trace_forward.py     analysis A: tensor trace of one forward pass
+                      probe_loss.py        analysis D: loss vs σ, σ-sweep visualisation
+                      plot_*.py            step 5  deck figures (see the page table)
+                      train_classifier.py  retrain the scoring classifier
+train/                train_dreambooth_lora_qwenimage21_img2img.py  diffusers @ e0abab8 (Apache-2.0) + 4 hooks + --train_shift
+                      train_hooks.py  hook implementation        hooks.patch  full diff against the upstream file
+results/              train/             B's val / probe / train logs and σ summary
+                      train_e_shift5/    E's val / probe logs and σ summary
+                      train_f_proto/     F's val / probe logs
+                      sweep/phase{1,2,3}/  C metrics per phase (phase3 also has x0trace.json)
+                      probe/             D's results.json, vis_numbers.json
+deck/                 the lecture (practice.html + figures in media/)
+figures/              the two README figures that are not in the deck
+```
 
-| 部分 | 硬件 | 显存峰值 | 耗时 |
+## Hardware
+
+| Step | Hardware | Peak memory | Time |
 | --- | --- | --- | --- |
-| B 训练（3000 步 + 16 次验证 + probe） | 1× H100 80GB | 36 GiB | 训练约 0.35 s/步；每轮验证（64 张 × 40 步）约 160 s；整个作业 1 h 42 min，其中 GPU 训练约 1.4 h |
-| A 前向追踪 | 1× H100 80GB | 33.3 GiB | 约 30 s（不含下载权重）；采样每步 38 ms（KV 缓存开）/ 73 ms（关） |
-| C 推理扫描 | 1× 96 GB 数据中心卡（RTX PRO 6000 Blackwell） | — | 基模 14 组配置约 44 min，LoRA 7 组配置约 21 min |
-| D probe | 同 C | — | 约 13 min |
+| Data, evaluation summary, most figures, classifier training | CPU | — | seconds to minutes |
+| B training (3000 steps + 16 validations + probe every 50 steps) | 1× H100 80GB | 36 GiB | ~0.24–0.35 s/step; one validation (64 images × 40 steps) ~150 s; whole job 1.5–1.7 h |
+| E / F training | E: 1× RTX PRO 6000 Blackwell 96 GB; F: 1× H100 80GB | 36 GiB | same order as B (F 1.6 h, E 2.3 h) |
+| A forward trace | 1× H100 80GB | 33 GiB | ~30 s (excluding the weight download); 38 ms per sampling step with the KV cache, 73 ms without |
+| C sweeps, phases 1 and 2 | 1× 96 GB card (RTX PRO 6000 Blackwell) | — | phase 1: 14 configs ~44 min; phase 2: 7 configs ~21 min |
+| C sweep, phase 3 | 1× H100 80GB | — | 11 configs + x0′ trace ~28 min |
+| D probe | 1× 96 GB card | — | ~13 min |
 
-任何加载 Qwen-Image 2.1 的脚本都需要一张 ≥ 40 GB 显存的 CUDA 卡（bf16，全部组件放在 GPU 上）。
-数据准备、分类器训练和画图只需要 CPU。
+Every script that loads Qwen-Image 2.1 needs **one CUDA GPU with ≥ 40 GB** (bf16, all components on the GPU).
 
-## 安装
+## Install
 
 ```bash
-git clone <this repo> && cd qwen-image-edit-mnist
-python -m venv .venv && source .venv/bin/activate      # Python 3.10+，实验用 3.12
-# 先按 CUDA 版本装 torch，例如 CUDA 12.8：
+git clone https://github.com/ManagerZhang10/qwen-image-edit-mnist.git && cd qwen-image-edit-mnist
+python -m venv .venv && source .venv/bin/activate      # Python 3.10+; the runs used 3.12
+# Install torch for your CUDA first, e.g. CUDA 12.8:
 pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 pip install -e .
 ```
 
-**diffusers 必须是 commit `e0abab83b5df05de9e7abd788643c1a7c1e42e28`**：`QwenImage21Pipeline`、
-`AutoencoderKLQwenImage21` 和 `train/` 下的训练脚本都依赖这个版本。`requirements.txt` 里已经固定为该 commit 的源码包。
+To only look at the data and draw figures on a CPU,
+`pip install torch torchvision numpy pillow matplotlib pyarrow && pip install -e . --no-deps` is enough.
 
-## 下载基础模型（约 31 GB）
+**diffusers must be commit `e0abab83b5df05de9e7abd788643c1a7c1e42e28`**: `QwenImage21Pipeline`,
+`AutoencoderKLQwenImage21` and the trainer under `train/` depend on it, and `requirements.txt` pins that commit's
+source archive.
 
-权重来自 Hugging Face 上的 `Qwen/Qwen-Image-2.1`，本实验固定在
-revision `790c92633540aa0cb11d9abf19eb46d861714758`（diffusers 格式快照）。
+## Download the base-model weights (~31 GiB)
 
-> **许可证：Qwen-Image 2.1 的权重使用 qwen-research license，不是 Apache-2.0。**
-> 下载前请先到模型页阅读并接受该许可，使用范围以许可条款为准。**本仓库不包含、也不再分发任何权重。**
-> 本仓库的 Apache-2.0 只覆盖这里的代码。
+The weights are [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) on Hugging Face, pinned here to
+revision **`790c92633540aa0cb11d9abf19eb46d861714758`** (diffusers-format snapshot).
+
+> **License: the Qwen-Image 2.1 weights are under the qwen-research license, not Apache-2.0.**
+> Read and accept that license on the model page yourself before downloading; the permitted use is whatever its
+> terms say. **This repository does not contain or redistribute any weights**, and its Apache-2.0 license covers
+> only the code here. The **LoRA trained in these experiments is not released either**; train your own with the
+> commands below.
 
 ```bash
-hf auth login                  # 模型页要求先接受许可时需要登录
 hf download Qwen/Qwen-Image-2.1 \
   --revision 790c92633540aa0cb11d9abf19eb46d861714758 \
   --local-dir models/Qwen-Image-2.1
-# 旧版 CLI 等价写法：
+# Equivalent with the older CLI:
 # huggingface-cli download Qwen/Qwen-Image-2.1 --revision 790c92633540aa0cb11d9abf19eb46d861714758 --local-dir models/Qwen-Image-2.1
 ```
 
-大小约 31 GB：`transformer/` 13.25 GiB，`text_encoder/`（Qwen3-VL）16.33 GiB，`vae/` 1.26 GiB。
-**tokenizer 和图像处理器在 `processor/` 目录下**（不是常见的 `tokenizer/`），pipeline 会自动读取。
-下文的 `MODEL=models/Qwen-Image-2.1` 就指这个目录。
+- Size: ~31 GiB (33 GB). `transformer/` 13.25 GiB, `text_encoder/` (Qwen3-VL) 16.33 GiB, `vae/` 1.26 GiB.
+- **The tokenizer and image processor live in `processor/`** (not the usual `tokenizer/`); the pipeline finds them.
+- At the time of writing this revision downloads without logging in; if the model page later requires accepting the
+  license, run `hf auth login` first.
+- `MODEL=models/Qwen-Image-2.1` below refers to this directory; the deck p.3 thumbnails only need its `vae/`.
 
-## 快速上手：数据 → 训练 → 推理 → 复现图
+## Quickstart: one command per step
+
+Run everything from the repository root. **Steps marked GPU need the weights above and a ≥ 40 GB card**; the rest
+run on a CPU.
 
 ```bash
 MODEL=models/Qwen-Image-2.1
-
-# 1) 数据：make_pairs('train', 500) -> 2000 对，写成训练脚本能读的 parquet（CPU，MNIST 自动下载到 ./data）
-python scripts/prepare_data.py --out data/mnist_edit_train --n-per-task 500
-
-# 2) 训练（实验 B 的超参，见下），约 1.5 h / H100
-#    先跑 6 步的冒烟测试：
-STEPS=6 CKPT_EVERY=6 VAL_EVERY=3 PROBE_EVERY=3 N_VAL=2 \
-  bash scripts/train_lora.sh $MODEL data/mnist_edit_train outputs/lora_smoke
-bash scripts/train_lora.sh $MODEL data/mnist_edit_train outputs/lora
-#    -> outputs/lora/ckpt-3000/pytorch_lora_weights.safetensors, outputs/lora/hook_logs/{train,probe,val}.jsonl
-
-# 3) 推理：单次编辑 / 扫描
-python scripts/infer.py edit --model $MODEL --task rot90 --index 0 --out outputs/edit_base
-python scripts/infer.py edit --model $MODEL --task invert --lora outputs/lora/ckpt-3000 --steps 4 --out outputs/edit_lora
-python scripts/infer.py sweep --model $MODEL --phase 1 --out outputs/sweep/phase1
-python scripts/infer.py sweep --model $MODEL --phase 2 --lora outputs/lora/ckpt-3000 --out outputs/sweep/phase2
-
-# 4) 分析：前向追踪、loss vs σ
-python scripts/trace_forward.py --model $MODEL --out outputs/trace
-python scripts/probe_loss.py measure --model $MODEL --lora outputs/lora/ckpt-3000 --out outputs/probe
-python scripts/probe_loss.py vis --model $MODEL --lora outputs/lora/ckpt-3000 --out outputs/probe/vis
-
-# 5) 画图（CPU）
-python scripts/plot_tasks.py
-python scripts/plot_train.py --src outputs/lora/hook_logs
-python scripts/plot_sweep.py --phase 1 --src outputs/sweep && python scripts/plot_sweep.py --phase 2 --src outputs/sweep
-python scripts/plot_trace.py --src outputs/trace
-python scripts/plot_probe.py --src outputs/probe --vis outputs/probe/vis
 ```
 
-不跑 GPU 也能用仓库里附带的汇总数据复现部分图：
-`python scripts/plot_train.py`（读 `results/train/`）和 `python scripts/plot_probe.py`（读 `results/probe/`）。
+**0. CPU self-check** (no GPU, no weights, tens of seconds)
 
-### 训练超参（实验 B，`scripts/train_lora.sh`）
+```bash
+python scripts/prepare_data.py --out outputs/smoke_data --n-per-task 4
+python scripts/summarize_results.py        # print every results table below from the shipped results/
+```
 
-| 项 | 值 |
-| --- | --- |
-| 数据 | 2000 对（4 任务 × 500），batch 1（不同指令的 image-pad 位置不同，脚本不允许混 batch），3000 步 = 1.5 epoch |
-| LoRA | rank 32，alpha 32，层 `to_k,to_q,to_v,to_out.0,img_mlp.proj,img_mlp.gate_layer,img_mlp.out`，448 个张量，83.9 M 参数 |
-| 优化 | AdamW，lr 1e-4 constant，无 warmup，weight decay 1e-4，梯度裁剪 1.0，seed 0 |
-| 精度 / 分辨率 | bf16，512×512，`--cache_latents`，不开 `--random_flip`（翻转会改变旋转任务的语义） |
-| σ 采样 | `--weighting_scheme none`：训练时 σ ~ U(0,1)，不做 shift，loss 权重 1；shift 只在采样时生效 |
-| 验证 | `make_pairs('test', 16)` 共 64 张，第 i 张种子 1000+i，40 步，CFG 1.0 |
-| probe | 同样 64 张，σ ∈ {0.1, 0.3, 0.5, 0.7, 0.9}，每张固定噪声（种子 1234+i），每 50 步一次 |
+**1. Prepare data** (CPU; MNIST is downloaded to `./data`)
 
-## 主要结果
+```bash
+python scripts/prepare_data.py --out data/mnist_edit_train                       # B / E: 4 × 500 = 2000 pairs
+python scripts/prepare_data.py --out data/mnist_edit_proto --next-target proto   # F: fixed prototypes as next targets
+python scripts/prepare_data.py --out data/mnist_edit_next --tasks next           # a task subset (comma-separated, e.g. rot90,invert)
+```
 
-完整数字在 `results/`：`train/val.jsonl`、`train/probe.jsonl`（B），`sweep/phase*/metrics_phase*.json`（C），
-`probe/results.json`（D）。每个任务 16 张测试图，样本量小，几个百分点的差异在噪声范围内。
+With `--next-target proto` every reference image, and the targets of the other three tasks, are identical to the
+default data; only the next targets change.
 
-### 训练前后（B，40 步采样，CFG 1）
+**2. Train the LoRA** (GPU, ~1.5 h on an H100)
 
-| | 顺时针 90° | 180° | 下一个数字 | 反色 | 平均 |
+```bash
+bash scripts/train_lora.sh $MODEL data/mnist_edit_train outputs/lora_smoke --smoke        # 6-step smoke test, run this first
+bash scripts/train_lora.sh $MODEL data/mnist_edit_train outputs/lora_b                    # B: baseline
+bash scripts/train_lora.sh $MODEL data/mnist_edit_train outputs/lora_e --train-shift 5    # E: train-time σ shift 5
+bash scripts/train_lora.sh $MODEL data/mnist_edit_proto outputs/lora_f                    # F: reads summary.json, so the test set also uses prototypes
+bash scripts/train_lora.sh $MODEL data/mnist_edit_next  outputs/lora_next                 # next only (the test set keeps all four tasks)
+# outputs: outputs/lora_b/ckpt-3000/pytorch_lora_weights.safetensors, outputs/lora_b/hook_logs/{train,probe,val}.jsonl
+```
+
+More options: `--steps`, `--val-every`, `--probe-every`, `--n-val`, `--resume latest`; see
+`bash scripts/train_lora.sh --help`.
+
+**3. Inference / inference-setting sweeps** (GPU)
+
+```bash
+python scripts/infer.py edit --model $MODEL --task rot90 --index 0 --out outputs/edit_base
+python scripts/infer.py edit --model $MODEL --task invert --lora outputs/lora_b/ckpt-3000 --steps 4 --out outputs/edit_lora
+python scripts/infer.py sweep --model $MODEL --phase 1 --out outputs/sweep/phase1                                 # base-model knobs
+python scripts/infer.py sweep --model $MODEL --phase 2 --lora outputs/lora_b/ckpt-3000 --out outputs/sweep/phase2  # LoRA scale
+python scripts/infer.py sweep --model $MODEL --phase 3 --lora outputs/lora_b/ckpt-3000 --out outputs/sweep/phase3  # CFG/shift/steps with the LoRA + x0′ trace
+```
+
+**4. Evaluation summary** (CPU)
+
+```bash
+python scripts/summarize_results.py b --train outputs/lora_b/hook_logs          # success over training, first step >= 90%
+python scripts/summarize_results.py e f --e outputs/lora_e/hook_logs --f outputs/lora_f/hook_logs --train outputs/lora_b/hook_logs
+python scripts/summarize_results.py c --sweep outputs/sweep                     # inference settings
+```
+
+**5. Analysis** (GPU)
+
+```bash
+python scripts/trace_forward.py --model $MODEL --out outputs/trace                                   # A
+python scripts/probe_loss.py measure --model $MODEL --lora outputs/lora_b/ckpt-3000 --out outputs/probe   # D
+python scripts/probe_loss.py vis --model $MODEL --lora outputs/lora_b/ckpt-3000 --out outputs/probe/vis
+```
+
+**6. Redraw the figures** (CPU; written to `outputs/figures/` by default, with the same file names as `deck/media/`
+so you can compare directly)
+
+```bash
+python scripts/plot_tasks.py                                   # deck p.1, p.2
+python scripts/plot_train.py                                   # deck p.8, 9, 13, 15 (from results/train/)
+python scripts/plot_probe.py                                   # deck p.11 (from results/probe/)
+python scripts/plot_sweep.py --phase 2 && python scripts/plot_sweep.py --phase 3   # curves and bars of deck p.16-19 (from results/sweep/)
+python scripts/plot_trace.py mask_simple                       # deck p.6 (schematic, no data)
+# These need image outputs from your own runs (the repo ships small JSON only, no images):
+python scripts/plot_train.py --src outputs/lora_b/hook_logs    # adds deck p.14 (validation images)
+python scripts/plot_probe.py --vis outputs/probe/vis           # adds deck p.10
+python scripts/plot_scoring.py --src outputs/sweep/phase3      # deck p.12
+python scripts/plot_sweep.py --phase 3 --src outputs/sweep     # full deck p.16, 17, 19 with thumbnails (phase 2 likewise)
+python scripts/plot_trace.py --src outputs/trace prep flow     # deck p.5; flow is a matplotlib version of p.4
+python scripts/plot_train_step.py --vae $MODEL/vae --vis outputs/probe/vis   # deck p.3 latent thumbnails (needs the VAE and diffusers)
+```
+
+Without GPU outputs, `plot_sweep.py` still draws the full layout and puts a one-line note where the thumbnails go;
+the finished figures are in `deck/media/`.
+
+## Deck page → script → result file
+
+Page numbers follow `deck/practice.html` (cover = 1); the Chinese title is the one shown on the slide. "Repo data"
+says whether `results/` alone is enough to redraw the figure; "needs outputs" means image outputs from your own run
+(the repo ships no large files; the finished figures are in `deck/media/`).
+
+| Page | Title (Chinese title on the slide) | Script that produces the data | Plot script → figure | Repo data |
+| --- | --- | --- | --- | --- |
+| 1 | Cover (封面) | `src/qie_mnist/data.py` | `plot_tasks.py` → `practice_strip.png` | no data needed (generated on CPU) |
+| 2 | Four edit tasks (四种编辑任务) | `data.py`, `prepare_data.py` | `plot_tasks.py` → `qi21_tasks.png` | no data needed |
+| 3 | One training step (训练一步怎么走) | `probe_loss.py vis` (x0′ thumbnail) + the VAE from the weights | `plot_train_step.py` → `tf_*.png` | needs the VAE and `outputs/probe/vis/rot90_11_x0hat_0.5.png` |
+| 4 | Tensor flow (张量怎么走) | `trace_forward.py` | **static image (draw.io), no generator script**; `plot_trace.py flow` draws a matplotlib version from the same trace | needs outputs (trace) |
+| 5 | Two preprocessing paths for the reference image (参考图的两条预处理) | `trace_forward.py` | `plot_trace.py prep` → `qi21_a_prep.png` | needs outputs (trace) |
+| 6 | Block-causal attention (块因果注意力) | `trace_forward.py` (numbers of the perturbation check) | `plot_trace.py mask_simple` → `qi21_a_mask_simple.png` | no data needed (schematic) |
+| 7 | Where the LoRA goes (LoRA 挂在哪) | `train_lora.sh` (`--lora_layers`, rank 32) | **static image (private drawing tool + draw.io), no generator script** | — |
+| 8 | Training loss (训练 loss) | `train_lora.sh` → `hook_logs/train.jsonl`, `probe.jsonl` | `plot_train.py` → `qi21_b_loss.png` | `results/train/` ✓ |
+| 9 | Loss by sigma (按 σ 看 loss) | `train_lora.sh` → `probe.jsonl` | `plot_train.py` → `qi21_b_probe_by_task.png` | `results/train/` ✓ |
+| 10 | Sigma sweep of the x0 guess (σ 扫描看 x0 猜测) | `probe_loss.py vis` | `plot_probe.py --vis` → `qi21_b_sigma_vis.png` | numbers in `results/probe/vis_numbers.json`; thumbnails need outputs |
+| 11 | loss = x0 error × 1/σ² (loss = x0 误差 × 1/σ²) | `probe_loss.py measure` | `plot_probe.py` → `qi21_b_sigma_decomp.png` | `results/probe/results.json` ✓ |
+| 12 | How success is scored (成功率怎么算) | `infer.py sweep --phase 3` (lora1.0 outputs), `evaluate.py` | `plot_scoring.py` → `qi21_c_scoring.png` | needs outputs (5 generated images) |
+| 13 | Success rate (成功率) | `train_lora.sh` → `val.jsonl` | `plot_train.py` → `qi21_b_success.png` | `results/train/` ✓ |
+| 14 | Before vs after training (训练前后对照) | `train_lora.sh` → `hook_logs/val/step_*/` | `plot_train.py --src <hook_logs>` → `qi21_b_samples.png` | needs outputs (validation images) |
+| 15 | Learnable vs not learnable (学得会 vs 学不会) | `train_lora.sh` → `val.jsonl`, `probe.jsonl` | `plot_train.py` → `qi21_b_task_order.png` | `results/train/` ✓ |
+| 16 | CFG (CFG) | `infer.py sweep --phase 3` | `plot_sweep.py --phase 3` → `qi21_c_lora_cfg.png` | numbers in `results/sweep/phase3/` ✓; thumbnails need outputs |
+| 17 | Shift (shift) | `infer.py sweep --phase 3` | `plot_sweep.py --phase 3` → `qi21_c_lora_shift.png` | same as above |
+| 18 | LoRA scale (LoRA 强度) | `infer.py sweep --phase 2` | `plot_sweep.py --phase 2` → `qi21_c_lora_scale.png` | numbers in `results/sweep/phase2/` ✓; thumbnails need outputs |
+| 19 | Sampling steps (采样步数) | `infer.py sweep --phase 3` | `plot_sweep.py --phase 3` → `qi21_c_lora_steps.png` (plus `qi21_c_lora_x0hat.png`) | numbers in `results/sweep/phase3/` ✓; thumbnails need outputs |
+
+## Results
+
+`python scripts/summarize_results.py` prints the full numbers from `results/`. **16 test images per task, one image
+= 6.25 percentage points**; differences of a few points below may be one or two images.
+
+### B before and after training (40 sampling steps, CFG 1)
+
+| | rotate 90° clockwise | rotate 180° | next digit | invert | mean |
 | --- | --- | --- | --- | --- | --- |
-| 底模（第 0 步） | 75%（IoU 0.37） | 62%（0.44） | 25% | 38%（0.01） | 50.0% |
-| LoRA 第 3000 步 | **100%（0.94）** | **100%（0.97）** | 12% | **94%（0.99）** | 76.6% |
-| 首次 ≥ 90% | 第 400 步 | 第 200 步 | 3000 步内未达到 | 第 600 步 | |
+| base model (step 0) | 75% (IoU 0.37) | 62% (0.44) | 25% | 38% (0.01) | 50.0% |
+| step 200 | 81% (0.40) | **100% (0.97)** | 6% | 19% (0.00) | 51.6% |
+| LoRA step 3000 | **100% (0.94)** | **100% (0.97)** | 12% | **94% (0.99)** | 76.6% |
+| first step ≥ 90% | 400 | 200 | not within 3000 steps | 600 | |
 
-- **学得会的**：两种旋转和反色是逐像素的确定性变换，几百步就学会，IoU 0.94–0.99。底模本来也会旋转，但会把数字重画成
-  别的字形（IoU 0.37），而且从来不做反色（IoU 0.01，那 38% 是分类器在未反色的原图上碰巧判对）。
-- **学不会的**：「下一个数字」的目标是另一个人写的 n+1，同一个输入没有唯一答案。2000 对数据、3000 步之后，成功率一直在 0–19% 之间。
-- **loss 和成功率脱节**：固定测试集 loss 在前 200 步就降了约 40%，成功率却在 200–600 步才台阶式跳上去。
+- **What is learned**: the two rotations and invert are deterministic per-pixel transforms, learned in a few hundred
+  steps, IoU 0.94–0.99. The base model does rotate but redraws the digit (IoU 0.37), and it never inverts (IoU 0.01;
+  its 38% is the classifier happening to be right on the un-inverted image).
+- **What is not learned**: the "next digit" target is another writer's n+1, so one input has no unique answer; the
+  success rate stays at 0–19% for all 3000 steps.
+- **Loss and success rate disagree**: the held-out loss has done about 80% of its total drop by step 200
+  (0.043 → 0.025 → finally 0.020), while the success rate jumps in steps between 200 and 600; at step 200 invert even
+  drops from 38% to 19% first.
 
-![训练过程](figures/qi21_b_success.png)
+### C inference settings (step-3000 LoRA, the same 64 inputs and noise)
 
-### 推理配置（C）
+| Knob (phase 3, LoRA scale 1.0) | Mean success | Next digit | Other three tasks | Time per image |
+| --- | --- | --- | --- | --- |
+| CFG 1 (default) / 2 / 4 / 7 | 75.0% / 78.1% / 81.2% / 81.2% | 6% / 19% / 31% / 31% | unchanged (100 / 100 / 94%) | 2.3 s → 4.6 s (CFG > 1 runs two forward passes per step) |
+| fixed shift 1 / default dynamic (≈1.71) / 3 / 6, 40 steps | 75.0% / 75.0% / 76.6% / 76.6% | 6% / 6% / 12% / 12% | unchanged | same |
+| 2 / 4 / 8 / 16 / 40 sampling steps | 76.6% / 75.0% / 75.0% / 78.1% / 75.0% | 12% / 6% / 6% / 19% / 6% | 100 / 100 / 94% from 2 steps on | 0.29 s (2 steps) vs 2.33 s (40 steps), 8× faster |
 
-| 配置（64 张） | 平均成功率 | 说明 |
-| --- | --- | --- |
-| 底模，40 步，CFG 1（默认） | 46.9% | |
-| 底模，2 步 | 32.8% | 一步从 σ=1 跳到 0.02，输出是又暗又糊的「条件平均图」；8 步起成形 |
-| 底模，CFG 4 / 7 | 57.8% / 60.9% | 旋转更听话（rot90 69% → 94%），耗时翻倍；CFG 7 开始出色块 |
-| 底模，shift 1 / 3 / 6 | 45–48% | 40 步下影响在噪声范围内 |
-| 底模，KV 缓存关 | 46.9% | 结论逐张相同，慢 1.91×；像素不逐位一致（平均差 1/255，bf16 分块不同） |
-| 底模，causal_condition 关 | 59.4% | 画面反而更干净；**只是这个小任务上的观察，没有和官方推理代码核对** |
-| LoRA scale 0 / 0.5 / 1.0 / 1.5 | 46.9% / **81.2%** / 76.6% / 73.4% | scale 0 与底模逐像素相同；0.5 已学会旋转和反色；> 1 继续压低「下一个数字」 |
-| LoRA 1.0，4 步 / 8 步 | 75.0% / 75.0% | **确定性编辑 4 步就够**（旋转 100%，比 40 步快 6.4×）；「下一个数字」少步就糊成平均图 |
-| LoRA 1.0，CFG 4 | 81.2% | 提升全部来自「下一个数字」（12% → 31%） |
+| Knob (phase 2) | Mean success | Next digit | Notes |
+| --- | --- | --- | --- |
+| LoRA scale 0 / 0.5 / 1.0 / 1.5 | 46.9% / **81.2%** / 76.6% / 73.4% | 25% / 31% / 12% / 0% | scale 0 matches the base model pixel for pixel; 0.5 already learns the rotations and invert and removes the colour artefacts; > 1 keeps pushing "next digit" down |
 
-![LoRA 步数](figures/qi21_c_lora_steps.png)
+- **Takeaways**: after fine-tuning, the edits with a unique answer **need only 2 steps**; CFG only helps "next digit"
+  (at twice the time); at 40 steps shift barely matters (few steps × different shifts was not tested); LoRA scale 0.5
+  is enough. With few steps "next digit" comes out as a blurry "mean image" and only becomes a concrete digit from
+  16 steps on.
+- Phase 3 ran on an H100 and phases 1 and 2 on an RTX PRO 6000: the same config (LoRA 1.0, 40 steps) scores 75.0% in
+  phase 3 and 76.6% in phase 2, one "next digit" image apart; times are not comparable across phases either.
+- Phase 1 (base model) findings: CFG 4 / 7 make the rotations follow the instruction better (mean 46.9% →
+  57.8% / 60.9%); 2-step outputs are dark and blurry; the KV cache is 1.91× faster with all 64 verdicts identical;
+  turning causal_condition off gives cleaner images (**an observation on this toy task only, not checked against the
+  official inference code**).
 
-### loss 与 σ（D，LoRA 第 3000 步，16 张 × 4 组噪声的平均）
+### D loss and σ (LoRA step 3000, mean over 16 images × 4 noise draws)
 
 | σ | 0.1 | 0.5 | 0.9 | 0.99 | 1.0 |
 | --- | --- | --- | --- | --- | --- |
-| 90° / 180° / 反色 | 0.056 / 0.042 / 0.043 | 0.010 / 0.004 / 0.005 | 0.006 / 0.002 / 0.003 | 0.009 / 0.003 / 0.005 | 0.023 / 0.017 / 0.031 |
-| 下一个数字 | 0.057 | 0.018 | 0.060 | 0.513 | 0.690 |
+| 90° / 180° / invert | 0.056 / 0.042 / 0.043 | 0.010 / 0.004 / 0.005 | 0.006 / 0.002 / 0.003 | 0.009 / 0.003 / 0.005 | 0.023 / 0.017 / 0.031 |
+| next digit | 0.057 | 0.018 | 0.060 | 0.513 | 0.690 |
 
-- σ = 1 时 x_t 不含 x0 的信息，最优预测是 E[x0|c]，loss 的下界是 **D = E_c[Var(x0|c)]**。确定性任务 D = 0；
-  「下一个数字」在训练集 latent 空间里实测 **D ≈ 0.36**（10 类的类内方差平均）。
-- 确定性任务：loss 从 σ=0.1 一路降到 0.9 附近的 0.002–0.006，σ = 1.0 回升到 0.02–0.03。不是 0，但只有 next 的 D 的约 1/15。
-- 「下一个数字」：σ = 0.9 时 loss 只有 D 的 1/6，图像结构让高噪声下的 x_t 仍然泄露大部分 x0。loss 只在最后 1–5% 的噪声区间
-  急升，σ = 1 时为 0.69 ≈ 1.9 × D。高出的部分是偏差项：模型没学会这个任务，σ = 1 时输出的不是 n+1 那一类的平均图。
-- σ 小时 v loss 偏高是 1/σ² 放大造成的：x0 误差 = σ² × v loss，x0 误差随 σ 单调上升。
+- At σ = 1, x_t carries no information about x0, so the best prediction is E[x0|c] and the loss is bounded below by
+  **D = E_c[Var(x0|c)]**. D = 0 for the deterministic tasks; for "next digit" it measures **D ≈ 0.36** in the
+  training latents.
+- **The identity v loss = x0 error × 1/σ²**: the left end (small σ) is the 1/σ² amplification, present in every task;
+  the right end (σ → 1) is the x0 error shooting up once the target is no longer visible, which only the
+  non-unique "next digit" shows clearly, hence its U shape.
+- For "next digit" the loss at σ = 0.9 is only 1/6 of D (image structure lets x_t still leak most of x0); at σ = 1 it
+  is 0.69 ≈ 1.9 × D: the excess is a bias term, because the model has not learned the task.
 
 ![loss vs sigma](figures/qi21_b_loss_vs_sigma_by_task.png)
 
-### 前向追踪（A）的几个事实
+### E / F: two training variants (everything else as in B)
 
-零样本 rot90，第 5 步（σ = 0.94）的一步预测 x0′ 已经是转好的数字，后面 35 步只在修细节：
+| | B (baseline) | E (train-time σ shift 5) | F (fixed next prototypes) |
+| --- | --- | --- | --- |
+| σ actually used in training: mean / share σ > 0.9 | 0.50 / 10% | 0.75 / 34% | same as B |
+| first step ≥ 90%: 90° / 180° / invert | 400 / 200 / 600 | **200 / 200 / 200** | 800 / 200 / 600 |
+| mean success at step 200 | 51.6% | **76.6%** (invert 19% → 94%) | 51.6% |
+| mean success at step 3000 | 76.6% | 76.6% | 78.1% |
+| next success (mean / max over steps 200–3000) | 7.5% / 19% | 7.5% / 19% | 6.7% / 19% |
+| next share copied from the source (same mean) | 0.16 | 0.08 | 0.10 |
+| probe loss at step 3000, σ = 0.1 | reference | 11–18% higher for every task (small σ is trained less) | the three deterministic tasks match B |
+| probe loss at step 3000, next at σ = 0.9 | 0.060 | 0.061 | 0.046 (the target changed, so the absolute value is not directly comparable) |
+
+- **E**: putting a third of the training steps at σ > 0.9 makes the deterministic edits converge 2–3× faster in
+  steps, but the final numbers match B and "next digit" is still not learned.
+- **F**: with a fixed target the next loss does drop, but the success rate and IoU (against the prototype, 0.09–0.23
+  throughout) stay in the same noise band as B; the 4 "1→2" test samples, which share one prototype target, are drawn
+  as 9 / 0 / 9 / 3. F's 90° also dips between steps 400 and 600 (down to 31%) and recovers by step 800; the cause was
+  not investigated.
+- Together: "next digit" failing is explained neither by too little high-σ training nor by the target variance (D)
+  alone.
+- E's step-0 (base model) validation differs from B by one image (90° 69% vs 75%): B and F ran on H100 and their
+  step-0 predictions agree exactly; E ran on an RTX PRO 6000 Blackwell, where 2 of the 64 predictions differ and one
+  rot90 sample flips from success to failure. bf16 differences between GPU models flip borderline samples; runs on
+  the same GPU model reproduce.
+
+### A few facts from the forward trace (A)
+
+Zero-shot rot90: at step 5 (σ = 0.94) the one-step prediction x0′ is already the rotated digit; the remaining 35
+steps only refine details:
 
 ![x0 hat](figures/qi21_a_x0hat.png)
 
-- 512² 的图经 16× VAE 变成 32×32×64，一个 token = 16×16 像素，**不做 2×2 打包**。
-- 联合序列 2073 个 token：文本 8 → 参考图 1024 → 指令等 17 → 目标 1024。块因果 mask：文本段下三角，每张图内部全连通。
-  所以**参考图 token 看不到后面的指令**（扰动实测差 0.0）。
-- 前缀 1049 个 token 用 t = 0 的调制行，与步数无关，可以只算一次放进 KV 缓存。之后每步只算 1024 个目标 token，采样快约 1.9×。
-- 文本特征取 Qwen3-VL 最后一层**过 final norm 之前**的输出（std 11.2 vs 2.3）。transformers 5.x 默认返回过 norm 的值，pipeline 用 hook 抵消。
+- A 512² image becomes 32×32×64 through the 16× VAE; one token = 16×16 pixels, with **no 2×2 packing**.
+- The joint sequence has 2073 tokens: text 8 → reference 1024 → instruction etc. 17 → target 1024. Block-causal mask:
+  lower-triangular within text segments, fully connected within each image, so **the reference tokens cannot see the
+  instruction after them** (a perturbation test measures a difference of exactly 0.0).
+- The 1049 prefix tokens use the t = 0 modulation row, independent of the step, so they can be computed once into the
+  KV cache; each later step computes only the 1024 target tokens, about 1.9× faster sampling.
+- The text features are Qwen3-VL's last layer **before the final norm** (std 11.2 vs 2.3). transformers 5.x returns
+  the normed values by default, and the pipeline undoes that with a hook.
 
-## 局限
+## Training hyperparameters (experiment B, `scripts/train_lora.sh` defaults)
 
-- **指令是固定模板**：每个任务 1 句中文，没有改写，结论不能推广到开放指令编辑（见上文）。
-- **样本量小**：每个任务 16 张测试图，成功率的分辨率是 6.25 个百分点。C 的分辨率对比只用了 8 张。
-- **评测靠一个 MNIST 分类器**：对「重画」宽容，对伪影敏感。对底模偏乐观，IoU 更能说明像素是否对得上。
-- **「下一个数字」的失败**是这组数据量和训练步数下的结果，没有试更多数据、更长训练或更高 rank。
-- **causal_condition 关闭后效果更好**这一观察没有和官方推理实现核对，不应当作结论。
-- **环境差异**：B 和 A 用 torch 2.11 + CUDA 12.8；C 和 D 用 torch 2.13 + CUDA 13.0，在另一种 GPU 上跑。
-  diffusers 始终是 e0abab8，transformers 始终是 5.17.0。bf16 下不同硬件的数值不会逐位一致。
-- **不发布 LoRA 权重**：训练得到的 LoRA 目前不公开（是否发布之后再定），需要自己按上面的命令训练。
-  本仓库也不包含任何 Qwen 权重。
+| Item | Value |
+| --- | --- |
+| Data | 2000 pairs (4 tasks × 500), batch 1 (the instructions put the image pad at different positions and the trainer refuses mixed batches), 3000 steps = 1.5 epochs |
+| LoRA | rank 32, alpha 32, layers `to_k,to_q,to_v,to_out.0,img_mlp.proj,img_mlp.gate_layer,img_mlp.out`, 448 tensors, 83.9 M parameters |
+| Optimisation | AdamW, lr 1e-4 constant, no warmup, weight decay 1e-4, gradient clipping 1.0, seed 0 |
+| Precision / resolution | bf16, 512×512, `--cache_latents`, no `--random_flip` (a flip would change the meaning of the rotation tasks) |
+| σ sampling | `--weighting_scheme none`: σ ~ U(0,1) at train time, loss weight 1; with `--train-shift S` it is then mapped to Sσ/(1+(S−1)σ) (E used 5); the sampling-time shift is unrelated |
+| Validation | `make_pairs('test', 16)`, 64 images, image i seeded 1000+i, 40 steps, CFG 1.0, every 200 steps |
+| Probe | the same 64 images, σ ∈ {0.1, 0.3, 0.5, 0.7, 0.9}, fixed noise per image (seed 1234+i), every 50 steps |
 
-## 目录
+## Limitations
 
-```text
-src/qie_mnist/       data.py（任务与样本生成） evaluate.py（分类器、成功率、IoU） probe.py（固定 σ 的 loss） plotting.py
-                     assets/mnist_cls.pt（自训练分类器，scripts/train_classifier.py 可重新生成）
-scripts/             prepare_data.py  train_lora.sh  infer.py  trace_forward.py  probe_loss.py  train_classifier.py
-                     plot_tasks.py  plot_train.py  plot_sweep.py  plot_trace.py  plot_probe.py
-train/               train_dreambooth_lora_qwenimage21_img2img.py（diffusers @ e0abab8，Apache-2.0，加了 4 个挂钩）
-                     train_hooks.py  hooks.patch（相对上游文件的完整 diff）
-results/             B / C / D 的小型 JSON 汇总      figures/  README 用图
-```
+- **Fixed instruction templates**: one Chinese sentence per task, no paraphrases. The 2000 training pairs use only 4
+  sentences, so the model learns "these 4 sentences → these 4 transforms"; nothing here shows it understands other
+  phrasings. Real editing data needs diverse human-written or LLM-paraphrased instructions.
+- **Small samples**: 16 test images per task, one image = 6.25 points; the resolution comparison in C phase 1 used
+  only 8 images.
+- **Scoring relies on one MNIST classifier**: lenient with redrawing, sensitive to artefacts, optimistic for the base
+  model; IoU says more about whether the pixels line up.
+- **The "next digit" failure** is the result for this data size, LoRA rank and 3000 steps (E and F did not rescue
+  it); more data, longer training or a higher rank were not tried.
+- **Better results with causal_condition off** were not checked against the official inference implementation and
+  should not be taken as a conclusion.
+- **Environment differences**: A, B, E and F used torch 2.11 + CUDA 12.8 (A, B, F on H100, E on RTX PRO 6000
+  Blackwell); C and D used torch 2.13 + CUDA 13.0, and C phases 1–2 and phase 3 ran on different GPUs. diffusers was
+  always e0abab8 and transformers always 5.17.0. In bf16, numbers are not bit-identical across GPU models and
+  borderline verdicts can flip; runs on the same GPU model reproduce.
+- **Deck p.4 and p.7 are static images** (draw.io / a private drawing tool); the repo has no generator for them.
+- **No weights are released**: download the Qwen base weights from Hugging Face as described above; the LoRA trained
+  here is not public, so train your own.
 
-## 许可证
+## License
 
-代码使用 [Apache-2.0](LICENSE)。`train/train_dreambooth_lora_qwenimage21_img2img.py` 来自 Hugging Face diffusers
-（Apache-2.0），来源 commit 和改动见 [NOTICE](NOTICE)。Qwen-Image 2.1 权重使用 qwen-research license，
-不在本仓库的许可范围内。MNIST 在运行时通过 torchvision 下载。
+The code is under [Apache-2.0](LICENSE). `train/train_dreambooth_lora_qwenimage21_img2img.py` comes from Hugging Face
+diffusers (Apache-2.0); its source commit and changes are listed in [NOTICE](NOTICE). The Qwen-Image 2.1 weights are
+under the qwen-research license, outside this repository's license. MNIST is downloaded at run time through
+torchvision.

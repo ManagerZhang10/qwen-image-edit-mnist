@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Figures for experiment A (tensor trace of one edit forward pass), from scripts/trace_forward.py output.
+"""Step 5 - figures for experiment A (tensor trace of one edit forward pass), from scripts/trace_forward.py output. CPU.
 
-Usage: python scripts/plot_trace.py [--src outputs/trace] [--out figures] [latent strip mask x0 shapes rope flow mask_simple]
-Reads trace.json + trace_arrays.npz, writes qi21_a_*.png.
+Deck page -> figure (pick with positional args; default all):
+  p.4 (Tensor flow)      the deck uses a static draw.io image (no generator here); flow -> qi21_a_flow.png is a
+                         matplotlib version of the same content
+  p.5 (Two preprocessing paths for the reference image)   prep -> qi21_a_prep.png
+  p.6 (Block-causal attention)                             mask_simple -> qi21_a_mask_simple.png (schematic, no data)
+Not in the deck: latent, strip, mask, x0 (README's qi21_a_x0hat.png), shapes, rope.
+
+Usage:
+  python scripts/plot_trace.py mask_simple                               # needs no data
+  python scripts/plot_trace.py --src outputs/trace prep flow x0          # needs trace.json + trace_arrays.npz
 """
 import argparse
 import json
@@ -16,10 +24,10 @@ from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: E402,F401
 
 from qie_mnist.plotting import cjk_fonts, save as _save  # noqa: E402
 
-ap = argparse.ArgumentParser()
+ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("--src", default="outputs/trace", help="trace_forward.py output dir")
-ap.add_argument("--out", default="figures")
-ap.add_argument("figs", nargs="*")
+ap.add_argument("--out", default="outputs/figures")
+ap.add_argument("figs", nargs="*", help="any of latent strip mask x0 shapes rope flow prep mask_simple (default: all)")
 ARGS = ap.parse_args()
 OUT = Path(ARGS.src)
 MEDIA = Path(ARGS.out)
@@ -33,10 +41,15 @@ plt.rcParams.update({"font.family": cjk_fonts() + ["DejaVu Sans"],
                      "ytick.color": MUTED, "axes.unicode_minus": False, "font.size": 16,
                      "axes.spines.top": False, "axes.spines.right": False})
 
-T = json.load(open(OUT / "trace.json"))
-A = np.load(OUT / "trace_arrays.npz")
-S = T["stages"]
-SEGS = S["6_joint"]["segments"]
+T = A = S = SEGS = None  # trace data, loaded on demand by _load() (mask_simple needs none)
+
+
+def _load():
+    global T, A, S, SEGS
+    T = json.load(open(OUT / "trace.json"))
+    A = np.load(OUT / "trace_arrays.npz")
+    S = T["stages"]
+    SEGS = S["6_joint"]["segments"]
 KIND_ZH = {"text": "文本", "cond0": "参考图", "target": "目标图（噪声）"}
 KIND_C = {"text": TXT_C, "cond0": ACC_L, "target": ACCENT}
 
@@ -110,7 +123,7 @@ def fig_strip():
     texts = [sg for sg in SEGS if sg["kind"] == "text"]
     for n, sg in enumerate(texts):
         mid = (sg["start"] + sg["end"]) / 2
-        # per-token decode splits the UTF-8 bytes of 「度」 into two pieces; show the joined text
+        # per-token decode splits the UTF-8 bytes of one character (U+5EA6) into two pieces; show the joined text
         label = sg.get("text", "").replace(" ��", " 度").replace("\n", "⏎")
         if len(label) > 34:  # break after the instruction instead of truncating
             k = label.find("<|im_end|>")
@@ -147,7 +160,7 @@ def fig_mask():
     md = A["mask_ds"].astype(np.float32); ds = S["7_mask"]["downsample"]
     fig = plt.figure(figsize=(19.2, 9.6))
     gs = fig.add_gridspec(1, 2, width_ratios=[1, 1], wspace=0.28, left=0.08, right=0.97, top=0.80, bottom=0.14)
-    # 左：示意图，不按真实长度，每段只画几个 token
+    # left: schematic, not to scale, a few tokens per segment
     segs = [("文本", 3, -1), ("参考图", 4, 0), ("指令", 4, -1), ("目标图", 4, 1)]
     ids = sum([[k] * n for _, n, k in segs], []); n = len(ids); ids = np.array(ids)
     q = np.arange(n)
@@ -509,8 +522,8 @@ def fig_mask_simple():
         pos += k
     ax.set_xlim(0, n); ax.set_ylim(n, 0); ax.set_xticks([]); ax.set_yticks([])
     for sp in ax.spines.values(): sp.set_visible(False)
-    ax.text(n / 2, n + 0.5, "被看的 token →", ha="center", va="top", fontsize=16, color=MUTED)
-    ax.text(-2.3, n / 2, "正在算的 token →", ha="center", va="center", fontsize=16, color=MUTED, rotation=90)
+    ax.text(n / 2, n + 0.5, "被看的 token（Key）→", ha="center", va="top", fontsize=16, color=MUTED)
+    ax.text(-2.3, n / 2, "正在算的 token（Query）→", ha="center", va="center", fontsize=16, color=MUTED, rotation=90)
     ax.text(9.0, 5.0, "参考图看不到\n后面的指令", ha="center", va="center", fontsize=17, color=TEXT)
     ax.text(13.0, 5.0, "前面的 token\n都看不到目标图", ha="center", va="center", fontsize=17, color=TEXT)
     from matplotlib.patches import Patch
@@ -519,9 +532,180 @@ def fig_mask_simple():
     save(fig, "qi21_a_mask_simple.png")
 
 
+C_VAE, C_VLM, C_TXT, C_REF, C_TGT, C_ATT = "#C8E6C4", "#C8E6C4", "#D9D9D9", "#CFE0F7", "#E2D3F5", "#FDE6C6"
+BLUE_T = "#1F5FAF"
+
+
+def _draw_prep(TH):
+    import os
+    from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: F811
+    from PIL import Image
+    fig = plt.figure(figsize=(16, 7.4))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, 1600); ax.set_ylim(740, 0); ax.axis("off")
+
+    def box(x, y, w, h, t, fc, sub=None, ec="none", fs=15, bold=False):
+        ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=12", fc=fc, ec=ec, lw=2))
+        cy = y + h / 2 - (9 if sub else 0)
+        ax.text(x + w / 2, cy, t, ha="center", va="center", fontsize=fs, color=TEXT, fontweight=600 if bold else None)
+        if sub:
+            ax.text(x + w / 2, cy + 22, sub, ha="center", va="center", fontsize=11.5, color=MUTED)
+
+    def arrow(x0, y0, x1, y1, color="#555", label=None, lx=None, ly=None, ha="center"):
+        ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=1.6, shrinkA=0, shrinkB=0))
+        if label:
+            ax.text(lx if lx is not None else (x0 + x1) / 2, ly if ly is not None else (y0 + y1) / 2 - 10,
+                    label, ha=ha, va="bottom", fontsize=12, color=color if color != "#555" else MUTED)
+
+    def img(x, y, w, h, path, border=None):
+        im = Image.open(path).convert("RGBA")
+        ax.imshow(np.asarray(im), extent=(x, x + w, y + h, y), zorder=2, interpolation="bilinear")
+        if border:
+            ax.add_patch(Rectangle((x, y), w, h, fill=False, ec=border, lw=1.2, zorder=3))
+
+    # ---------------- left: reference image + two grids
+    X, Y, S = 24, 190, 300
+    ax.text(X, Y - 64, "参考图 512 × 512", fontsize=17, color=TEXT, fontweight=600, va="bottom")
+    ax.text(X, Y - 40, "细格 = 16 px（VAE 一个 token，ViT 一块）", fontsize=12, color=MUTED, va="bottom")
+    ax.text(X, Y - 18, "粗格 = 32 px（2×2 合并后 = 1 个 slot）", fontsize=12, color=BLUE_T, va="bottom")
+    ref = Image.open(os.path.join(str(TH), "ref.png")).convert("L").resize((512, 512), Image.BICUBIC)
+    ax.imshow(np.asarray(ref), cmap="gray", extent=(X, X + S, Y + S, Y), zorder=1, vmin=0, vmax=255)
+    for k in range(33):
+        t = X + k * S / 32
+        lw, c, a = (1.1, "#5B9BE8", .9) if k % 2 == 0 else (.5, "#9A9A9A", .55)
+        ax.plot([t, t], [Y, Y + S], color=c, lw=lw, alpha=a, zorder=3)
+        t = Y + k * S / 32
+        ax.plot([X, X + S], [t, t], color=c, lw=lw, alpha=a, zorder=3)
+    bx, by = X + 12 * S / 16, Y + 5 * S / 16
+    ax.add_patch(Rectangle((bx, by), S / 16, S / 16, fill=False, ec="#FFB020", lw=2.6, zorder=4))
+    ax.text(X + S / 2, Y + S + 24, "黄框：1 个 slot = 2×2 个 16px 块", ha="center", fontsize=12, color="#B77800")
+
+    # ---------------- top path: VAE
+    yA = 110
+    ax.text(380, yA - 58, "VAE 这一路：给 DiT 看像素细节", fontsize=15, color=TEXT, fontweight=600)
+    arrow(X + S + 6, Y + 40, 380, yA, color="#555")
+    box(380, yA - 30, 150, 60, "VAE 编码", C_VAE, sub="÷16 · 逐通道归一化")
+    arrow(530, yA, 570, yA)
+    img(572, yA - 58, 116, 116, os.path.join(str(TH), "lat.png"))
+    ax.text(630, yA + 72, "32 × 32 × 64", ha="center", fontsize=12, color=MUTED)
+    arrow(700, yA, 740, yA, label="展平", ly=yA - 12)
+    img(742, yA - 14, 230, 28, os.path.join(str(TH), "tok.png"), border="#8E8E93")
+    ax.text(857, yA + 34, "1024 个 token × 64 维", ha="center", fontsize=12.5, color=TEXT)
+    arrow(972, yA, 1010, yA)
+    box(1012, yA - 30, 120, 60, "img_in", C_ATT, sub="64 → 4096")
+    arrow(1132, yA, 1170, yA)
+    box(1172, yA - 30, 170, 60, "参考图 1024 个", C_REF, sub="× 4096")
+
+    # ---------------- bottom path: Qwen3-VL
+    yB = 400
+    ax.text(380, yB - 70, "Qwen3-VL 这一路：让指令「看懂」参考图", fontsize=15, color=TEXT, fontweight=600)
+    arrow(X + S + 6, Y + S - 40, 380, yB, color="#555")
+    box(380, yB - 36, 170, 72, "16px 切块", C_VLM, sub="32×32 = 1024 块")
+    ax.text(465, yB + 48, "每块 16×16×3 × 2 帧\n= 1536 个数", ha="center", va="top", fontsize=11.5, color=MUTED)
+    arrow(550, yB, 585, yB)
+    box(587, yB - 36, 150, 72, "ViT 27 层", C_VLM, sub="1024 × 1152")
+    arrow(737, yB, 772, yB)
+    box(774, yB - 36, 150, 72, "2×2 合并", C_VLM, sub="→ 256 × 4096")
+    # small 2x2 -> 1 sketch
+    gx, gy, c = 800, yB + 50, 13
+    for i in range(2):
+        for j in range(2):
+            ax.add_patch(Rectangle((gx + j * c, gy + i * c), c - 1, c - 1, fc="#9A9A9A", ec="none"))
+    ax.annotate("", xy=(gx + 58, gy + c), xytext=(gx + 30, gy + c), arrowprops=dict(arrowstyle="-|>", color=MUTED, lw=1.2))
+    ax.add_patch(Rectangle((gx + 62, gy), 2 * c - 1, 2 * c - 1, fc="#5B9BE8", ec="none"))
+    arrow(924, yB, 960, yB)
+    # VLM sequence bar
+    sx, sw = 962, 380
+    ax.text(sx + sw / 2, yB - 46, "Qwen3-VL 的输入序列（去掉 system 后 281 个）", ha="center", fontsize=12, color=MUTED)
+    segs = [("文本 8", C_TXT, .7), ("256 个 image_pad（slot）", C_REF, 3.2), ("指令等 17", C_TXT, 1.1)]
+    tot = sum(s[2] for s in segs); cx = sx
+    for lab, col, wgt in segs:
+        w = sw * wgt / tot - 4
+        ax.add_patch(FancyBboxPatch((cx, yB - 24), w, 48, boxstyle="round,pad=0,rounding_size=8", fc=col, ec="none"))
+        ax.text(cx + w / 2, yB, lab, ha="center", va="center", fontsize=12, color=TEXT)
+        cx += w + 4
+    arrow(sx + sw + 4, yB, sx + sw + 40, yB)
+    box(sx + sw + 42, yB - 36, 196, 72, "Qwen3-VL 语言模型", C_VLM, sub="36 层 · 图文一条序列", fs=14)
+    ax.text(sx + sw + 140, yB + 56, "image_pad 处的输出丢掉，\n只留文本 25 个", ha="center", fontsize=11.5, color=MUTED, va="top")
+
+    # ---------------- bottom: DiT joint sequence
+    yC = 640
+    ax.text(380, yC - 60, "拼进 DiT：每个 slot 展开成 4 格，按行顺序填 VAE token（只对数量，不对 2×2 位置）", fontsize=14,
+            color=TEXT, fontweight=600)
+    jx, jw = 380, 1196
+    js = [("文本 8", C_TXT, .5), ("参考图 1024 = 256 slot × 4", C_REF, 4), ("指令等 17", C_TXT, .9),
+          ("目标 1024 = 末尾补 256 个空 slot × 4", C_TGT, 4)]
+    tot = sum(s[2] for s in js); cx = jx; pos = {}
+    for lab, col, wgt in js:
+        w = jw * wgt / tot - 5
+        ax.add_patch(FancyBboxPatch((cx, yC - 26), w, 52, boxstyle="round,pad=0,rounding_size=8", fc=col, ec="none"))
+        ax.text(cx + w / 2, yC, lab, ha="center", va="center", fontsize=12.5, color=TEXT)
+        pos[lab[:2]] = (cx, w); cx += w + 5
+    ax.text(jx + jw, yC - 60, "联合序列 2073 × 4096", ha="right", fontsize=12.5, color=MUTED)
+    # sources marked by colour and small labels, no long arrows (they would cross the middle path)
+    rx, rw = pos["参考"]
+    ax.text(rx + rw / 2, yC + 34, "上路：VAE 的 1024 个 token", ha="center", va="top", fontsize=12, color=BLUE_T)
+    ax.text(pos["文本"][0], yC + 62, "灰色两段：下路 Qwen3-VL 输出的文本 8 + 17 个", ha="left", va="top", fontsize=12, color=MUTED)
+    gx_, gw_ = pos["目标"]
+    ax.text(gx_ + gw_ / 2, yC + 34, "加噪目标 x_t 的 1024 个 token", ha="center", va="top", fontsize=12, color="#7A4FB5")
+    _save(fig, MEDIA, "qi21_a_prep.png", facecolor="white")
+
+
+
+
+def _prep_thumbs(th):
+    """The three thumbnails (reference, latent cube, token strip), generated exactly as for the deck figure, into dir th."""
+    from PIL import Image
+
+    def pca(zz):
+        C = zz.shape[0]; X = zz.reshape(C, -1).T; X = X - X.mean(0)
+        _, _, Vt = np.linalg.svd(X, full_matrices=False)
+        pc = X @ Vt[:3].T
+        pc = (pc - np.percentile(pc, 1, 0)) / (np.percentile(pc, 99, 0) - np.percentile(pc, 1, 0) + 1e-6)
+        return (np.clip(pc, 0, 1).reshape(zz.shape[1], zz.shape[2], 3) * 255).astype(np.uint8)
+
+    Image.fromarray(A["ref_rgba"][..., :3]).resize((256, 256), Image.LANCZOS).save(th / "ref.png")
+    zz = A["z_norm"].astype(np.float32)
+    fig = plt.figure(figsize=(3, 3), dpi=100)
+    for k in range(6, 0, -1):
+        o = 0.035 * k
+        ax = fig.add_axes([0.04 + o, 0.04 + o, 0.7, 0.7]); ax.set_facecolor("#EDEDF0")
+        ax.set_xticks([]); ax.set_yticks([])
+        for sp in ax.spines.values(): sp.set_color("#8E8E93")
+    ax = fig.add_axes([0.04, 0.04, 0.7, 0.7]); ax.imshow(pca(zz), interpolation="nearest")
+    ax.set_xticks([]); ax.set_yticks([])
+    for sp in ax.spines.values(): sp.set_color("#8E8E93")
+    fig.savefig(th / "lat.png", transparent=True); plt.close(fig)
+    fig = plt.figure(figsize=(8, 0.9), dpi=120)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(zz.reshape(64, -1), cmap="RdBu_r", vmin=-3, vmax=3, aspect="auto", interpolation="nearest")
+    ax.set_xticks([]); ax.set_yticks([])
+    fig.savefig(th / "tok.png"); plt.close(fig)
+
+
+def fig_prep():
+    """Deck p.5: the two preprocessing paths of the reference image. VAE (one latent token per 16 px) and Qwen3-VL
+    (16 px patches, 2x2 merged into one image_pad slot), and how a slot expands to 4 latent tokens in the DiT joint
+    sequence. The numbers come from experiment A's real forward pass (pixel_values [1024,1536], ViT output
+    [1024,1152], 256 image_pad, prompt_embeds [1,281,4096], joint sequence 2073)."""
+    import os
+    import tempfile
+    from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: F811
+    from PIL import Image
+    from qie_mnist.plotting import set_style
+    with tempfile.TemporaryDirectory() as td, plt.rc_context():
+        matplotlib.rcdefaults()   # thumbnails use matplotlib default style
+        _prep_thumbs(Path(td))
+        set_style()
+        _draw_prep(Path(td))
+
+
 if __name__ == "__main__":
     import traceback
-    todo = ARGS.figs or ["latent", "strip", "mask", "x0", "shapes", "rope", "flow", "mask_simple"]
+    todo = ARGS.figs or ["latent", "strip", "mask", "x0", "shapes", "rope", "flow", "prep", "mask_simple"]
+    if any(n != "mask_simple" for n in todo):
+        _load()
     for n in todo:
         try:
             globals()["fig_" + n]()

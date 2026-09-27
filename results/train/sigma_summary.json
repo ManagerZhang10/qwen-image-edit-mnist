@@ -1,0 +1,36 @@
+{
+ "run": "B (uniform sigma)",
+ "train_shift": 1.0,
+ "n_steps": 3000,
+ "mean_sigma": 0.4995,
+ "median_sigma": 0.4961,
+ "share_sigma_gt_0_9": 0.097,
+ "share_sigma_lt_0_3": 0.295,
+ "hist_edges": [
+  0.0,
+  0.1,
+  0.2,
+  0.3,
+  0.4,
+  0.5,
+  0.6,
+  0.7,
+  0.8,
+  0.9,
+  1.0
+ ],
+ "hist_share": [
+  0.098,
+  0.094,
+  0.103,
+  0.1033,
+  0.1047,
+  0.104,
+  0.101,
+  0.0863,
+  0.1087,
+  0.097
+ ],
+ "mean_loss": 0.04411,
+ "note": "sigma actually used for noising at each training step (after --train_shift), from hook_logs/train.jsonl"
+}

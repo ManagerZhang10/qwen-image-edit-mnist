@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Train the small MNIST CNN used for scoring (CPU, ~1-2 min). The repo already ships the result at
-src/qie_mnist/assets/mnist_cls.pt; rerun this only to regenerate it.
+"""Train the small MNIST CNN used for scoring (deck p.12, How success is scored; 98.8% test accuracy). CPU, ~1-2 min.
+
+The repo already ships the result at src/qie_mnist/assets/mnist_cls.pt; rerun this only to regenerate it.
 
 Usage: python scripts/train_classifier.py [--out src/qie_mnist/assets/mnist_cls.pt] [--mnist-root data]
 """

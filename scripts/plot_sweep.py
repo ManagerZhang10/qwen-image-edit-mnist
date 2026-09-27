@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
-"""Figures for experiment C (inference sweeps), from scripts/infer.py sweep output.
+"""Step 5 - figures for experiment C (inference-setting sweeps), from scripts/infer.py sweep output. CPU.
+
+Deck page -> output file:
+  p.16 (CFG)             qi21_c_lora_cfg.png     --phase 3
+  p.17 (Shift)           qi21_c_lora_shift.png   --phase 3
+  p.18 (LoRA scale)      qi21_c_lora_scale.png   --phase 2 (also qi21_c_lora_steps_p2.png, qi21_c_lora_cfg_p2.png)
+  p.19 (Sampling steps)  qi21_c_lora_steps.png   --phase 3 (also the x0' trace qi21_c_lora_x0hat.png, not in the deck)
+  --phase 1: base-model qi21_c_{steps,cfg,shift,kvcache,causal,resolution}.png (not in the deck)
+
+The top half of each figure shows the same inputs under each config; the bottom half shows success rate, pixel
+statistics and time.
+- With your own outputs (--src holding phase<N>/images/): the full figure; pixel statistics are computed from the
+  256 px thumbnails.
+- With the shipped results/sweep/ only (default): no images, so the thumbnail block becomes a one-line note while the
+  curves and bars are drawn as usual; pixel statistics come from phase<N>/image_stats.json (computed from the original
+  outputs with the same code). The kvcache / resolution / x0' figures need thumbnails and are skipped.
 
 Usage:
-  python scripts/plot_sweep.py --phase 1 --src outputs/sweep [--out figures]
-  python scripts/plot_sweep.py --phase 2 --src outputs/sweep
-Expects <src>/phase1/ (and <src>/phase2/ for --phase 2) with metrics_phase*.json, eval_set.json and images/.
-Writes qi21_c_*.png.
+  python scripts/plot_sweep.py --phase 3                       # from results/sweep/
+  python scripts/plot_sweep.py --phase 2
+  python scripts/plot_sweep.py --phase 3 --src outputs/sweep   # your own sweep outputs (with phase3/images/)
+  python scripts/plot_sweep.py --phase 3 --src outputs/sweep --write-stats   # also write image_stats.json
 """
 from __future__ import annotations
 
@@ -16,71 +31,150 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from qie_mnist.plotting import ACCENT, GRAY, LIGHT, MUTED, TEXT, plt, save, set_style  # noqa: F401
+from qie_mnist.plotting import ACCENT, GRAY, LIGHT, MUTED, TEXT, plt, set_style  # noqa: F401
+from qie_mnist.plotting import save as _save
 
-_ap = argparse.ArgumentParser()
-_ap.add_argument("--phase", type=int, default=1, choices=[1, 2])
-_ap.add_argument("--src", default="outputs/sweep", help="dir holding phase1/ and phase2/")
-_ap.add_argument("--phase1", default="phase1", help="phase-1 subdir name")
-_ap.add_argument("--phase2", default="phase2", help="phase-2 subdir name")
-_ap.add_argument("--out", default="figures")
+_ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+_ap.add_argument("--phase", type=int, default=3, choices=[1, 2, 3])
+_ap.add_argument("--src", default="results/sweep", help="dir holding phase1/ phase2/ phase3/")
+_ap.add_argument("--out", default="outputs/figures")
+_ap.add_argument("--write-stats", action="store_true", help="write the per-task pixel statistics to phase<N>/image_stats.json")
 A = _ap.parse_args()
 OUT = Path(A.src)
 MEDIA = Path(A.out)
+
+
+def save(fig, name):
+    _save(fig, MEDIA, name)
+
+
+def pdir(phase):
+    return OUT / f"phase{phase}"
+
+
+def eval_tasks(phase):
+    """Task of each test index (eval_set.json is the same in every phase; falls back to phase 1's)."""
+    for p in (pdir(phase), pdir(1)):
+        if (p / "eval_set.json").exists():
+            return [e["task"] for e in json.load(open(p / "eval_set.json"))]
+    raise FileNotFoundError(f"no eval_set.json under {pdir(phase)}")
+
+
+def has_images(phase, name):
+    return (pdir(phase) / "images" / name).is_dir()
+
+
+_STATS_CACHE: dict = {}
+
+
 TASK_ZH = {"rot90": "顺时针转 90°", "rot180": "旋转 180°", "next": "换成下一个数字", "invert": "黑白反色"}
 SERIES = [ACCENT, "#5E9EF0", "#A7C8F5", GRAY, "#1D1D1F"]
 
 
-def local_stats(phase, name):
-    """From the saved 256 px outputs. stroke_blur: share of mid-gray among non-background pixels
-    (soft edges / averaged strokes); peak: 99th-percentile brightness (dim = washed-out mean image);
-    chroma: mean RGB spread (MNIST is gray, so any colour is an artefact)."""
-    d = (OUT / (A.phase1 if phase == 1 else A.phase2)) / "images" / name
+def _compute_stats(phase, name, task=None):
+    """From the saved 256 px outputs, over all 64 inputs or one task's 16. stroke_blur: share of mid-gray among
+    non-background pixels (soft edges / averaged strokes); peak: 99th-percentile stroke brightness (dim = washed-out
+    mean image); chroma: mean RGB spread (MNIST is gray, so any colour is an artefact). Invert outputs are
+    black-on-white, so they are flipped back before blur / peak (otherwise peak is just the white background)."""
+    d = pdir(phase) / "images" / name
+    tasks = eval_tasks(phase)
     b, m, pk, ch = [], [], [], []
     for p in sorted(d.glob("[0-9][0-9].png")):
+        t = tasks[int(p.stem)]
+        if task and t != task:
+            continue
         a = np.asarray(Image.open(p).convert("RGB")).astype(np.int16)
         g = a.mean(-1)
+        if t == "invert":
+            g = 255 - g
         m.append(((g > 48) & (g < 208)).sum()); b.append((g >= 208).sum())
         pk.append(np.percentile(g, 99)); ch.append((a.max(-1) - a.min(-1)).mean())
     m, b = np.array(m, float), np.array(b, float)
     return dict(stroke_blur=float(np.mean(m / np.maximum(m + b, 1))), peak=float(np.mean(pk)), chroma=float(np.mean(ch)))
 
 
+def local_stats(phase, name, task=None):
+    """Computed from the thumbnails when present, else read from phase<N>/image_stats.json
+    (config name -> "all" / task name -> the three statistics)."""
+    if has_images(phase, name):
+        return _compute_stats(phase, name, task)
+    if phase not in _STATS_CACHE:
+        p = pdir(phase) / "image_stats.json"
+        _STATS_CACHE[phase] = json.load(open(p)) if p.exists() else {}
+    try:
+        return _STATS_CACHE[phase][name][task or "all"]
+    except KeyError:
+        raise SystemExit(f"no images under {pdir(phase) / 'images' / name} and no image_stats.json entry for it")
+
+
+def write_stats(phase, R):
+    stats = {n: {"all": _compute_stats(phase, n), **{t: _compute_stats(phase, n, t) for t in TASK_ZH}}
+             for n in R if has_images(phase, n)}
+    p = pdir(phase) / "image_stats.json"
+    json.dump(dict(note="pixel statistics of the 256 px outputs, computed by plot_sweep.py _compute_stats", **stats),
+              open(p, "w"), indent=1)
+    print("wrote", p)
+
+
+def per_task_stat(ax, xs, phase, names, key, scale=1.0, logx=False):
+    """Same layout as per_task_lines, for a pixel statistic: one line per task plus the 64-image mean."""
+    for k, t in enumerate(TASK_ZH):
+        ax.plot(xs, [local_stats(phase, n, t)[key] / scale for n in names], "-o", color=SERIES[k], lw=2.2, ms=6, label=TASK_ZH[t])
+    avg = [local_stats(phase, n)[key] / scale for n in names]
+    ax.plot(xs, avg, "-o", color=TEXT, lw=3, ms=7, label="平均")
+    if logx:
+        ax.set_xscale("log", base=2); ax.set_xticks(xs); ax.set_xticklabels([str(x) for x in xs])
+    ax.legend(fontsize=12, ncol=1, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    return avg
+
+
 def load(phase):
-    m = json.load(open((OUT / (A.phase1 if phase == 1 else A.phase2)) / f"metrics_phase{phase}.json"))
+    m = json.load(open(pdir(phase) / f"metrics_phase{phase}.json"))
     return m, {r["name"]: r for r in m["results"] if not r.get("skipped")}
 
 
 def img(phase, name, i, full=False):
-    p = (OUT / (A.phase1 if phase == 1 else A.phase2)) / "images" / name / (f"{i:02d}_full.png" if full else f"{i:02d}.png")
+    p = pdir(phase) / "images" / name / (f"{i:02d}_full.png" if full else f"{i:02d}.png")
     return np.asarray(Image.open(p).convert("RGB").resize((256, 256), Image.BICUBIC))
 
 
-def ref(i, kind="ref"):
-    return np.asarray(Image.open(OUT / A.phase1 / "images" / "_ref" / f"{i:02d}_{kind}.png").convert("RGB"))
+def ref(i, kind="ref", phase=1):
+    for p in (pdir(phase), pdir(1)):
+        f = p / "images" / "_ref" / f"{i:02d}_{kind}.png"
+        if f.exists():
+            return np.asarray(Image.open(f).convert("RGB"))
+    return None
 
 
 def pick_rows(meta, per_task=1):
     """one display example per task (first of the two)"""
-    ev = json.load(open(OUT / A.phase1 / "eval_set.json"))
+    ev = eval_tasks(meta["phase"])
     rows, seen = [], {}
     for i in meta["display"]:
-        t = ev[i]["task"]
+        t = ev[i]
         if seen.get(t, 0) < per_task:
             rows.append((i, t)); seen[t] = seen.get(t, 0) + 1
     return rows
 
 
 def strip(fig, gs_top, rows, cols, phase):
-    """cols: list of (title, name|'_ref'|'_tgt'). Draws a rows×cols image grid into gs_top."""
+    """cols: list of (title, name|'_ref'|'_tgt'). Draws a rows x cols image grid into gs_top.
+    Without thumbnails (only the shipped results/), the block becomes a one-line note."""
+    if not all(has_images(phase, n) for _, n in cols if not n.startswith("_")):
+        ax = fig.add_subplot(gs_top); ax.axis("off")
+        ax.text(0.5, 0.55, "缩略图需要自己跑的扫描输出（scripts/infer.py sweep）", ha="center", va="center",
+                fontsize=22, color=MUTED, transform=ax.transAxes)
+        ax.text(0.5, 0.42, "列：" + "  ·  ".join(t for t, _ in cols) + "；讲义里的完整图见 deck/media/",
+                ha="center", va="center", fontsize=15, color=MUTED, transform=ax.transAxes)
+        return
     sub = gs_top.subgridspec(len(rows), len(cols), wspace=0.04, hspace=0.06)
     for r, (i, task) in enumerate(rows):
         for c, (title, name) in enumerate(cols):
             ax = fig.add_subplot(sub[r, c])
             if name == "_ref":
-                im = ref(i)
+                im = ref(i, phase=phase)
             elif name == "_tgt":
-                im = ref(i, "tgt")
+                im = ref(i, "tgt", phase=phase)
             else:
                 im = img(phase, name, i)
             ax.imshow(im); ax.set_xticks([]); ax.set_yticks([])
@@ -131,16 +225,14 @@ def fig_steps(meta, R, phase=1, prefix="", names=None, fname="qi21_c_steps.png",
     xs = [R[n]["steps"] for _, n in names]
     per_task_lines(fig.add_subplot(bot[0]), xs, [R[n] for _, n in names], "采样步数", logx=True, note=phase == 1)
     ax = fig.add_subplot(bot[1])
-    ls = [local_stats(phase, n) for _, n in names]
-    ax.plot(xs, [l["peak"] / 255 for l in ls], "-o", color=ACCENT, lw=3, ms=7)
-    ax.set_xscale("log", base=2); ax.set_xticks(xs); ax.set_xticklabels([str(x) for x in xs])
-    ax.set_ylim(0.5, 1.05); ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
-    ax.set_xlabel("采样步数"); ax.set_title("笔画最亮处亮度（越低越灰暗；点上标每张耗时）", fontsize=17, loc="left")
-    for x, l, n in zip(xs, ls, [n for _, n in names]):
-        ax.annotate(f"{R[n]['sec_per_img']:.1f}s", (x, l["peak"] / 255), textcoords="offset points",
-                    xytext=(0, 10), ha="center", fontsize=12, color=MUTED)
+    avg = per_task_stat(ax, xs, phase, [n for _, n in names], "peak", scale=255, logx=True)
+    ax.set_ylim(0.3, 1.08); ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+    ax.set_xlabel("采样步数"); ax.set_title("笔画最亮处亮度（越低越灰暗；黑线上标每张耗时）", fontsize=17, loc="left")
+    for x, v, n in zip(xs, avg, [n for _, n in names]):
+        ax.annotate(f"{R[n]['sec_per_img']:.1f}s", (x, v), textcoords="offset points",
+                    xytext=(0, -20), ha="center", fontsize=12, color=MUTED)
     fig.suptitle(ttl or "只走 2 步 ≈ 从纯噪声一步猜「平均图」：又暗又糊；8 步起基本成形", fontsize=22, y=0.975, x=0.1, ha="left")
-    save(fig, MEDIA, fname)
+    save(fig, fname)
 
 
 def fig_cfg(meta, R, phase=1, names=None, fname="qi21_c_cfg.png", ttl=""):
@@ -158,17 +250,17 @@ def fig_cfg(meta, R, phase=1, names=None, fname="qi21_c_cfg.png", ttl=""):
     bars(fig.add_subplot(bot[2]), lab, [R[n]["sec_per_img"] for _, n in names], "每张耗时", fmt="{:.1f}s", color=GRAY,
          ylim=(0, 1.2 * max(R[n]["sec_per_img"] for _, n in names)))
     fig.suptitle(ttl or "CFG > 1 让旋转更听话（47% → 61%），CFG 7 开始冒色块；每步要算两遍", fontsize=22, y=0.975, x=0.12, ha="left")
-    save(fig, MEDIA, fname)
+    save(fig, fname)
 
 
-def fig_shift(meta, R):
-    names = [("动态≈1.7（默认）", "base"), ("shift 1", "shift1"), ("shift 3", "shift3"), ("shift 6", "shift6")]
+def fig_shift(meta, R, phase=1, names=None, fname="qi21_c_shift.png", ttl=""):
+    names = names or [("动态≈1.7（默认）", "base"), ("shift 1", "shift1"), ("shift 3", "shift3"), ("shift 6", "shift6")]
     names = [(a, b) for a, b in names if b in R]
     rows = pick_rows(meta)
     fig = plt.figure(figsize=(19, 12.5))
     gs = fig.add_gridspec(2, 2, height_ratios=[2.3, 1], width_ratios=[1.6, 1], hspace=0.22, wspace=0.12,
                           left=0.1, right=0.97, top=0.895, bottom=0.07)
-    strip(fig, gs[0, :], rows, [("输入", "_ref")] + names + [("标准答案", "_tgt")], 1)
+    strip(fig, gs[0, :], rows, [("输入", "_ref")] + names + [("标准答案", "_tgt")], phase)
     ax = fig.add_subplot(gs[1, 0])
     for k, (a, n) in enumerate(names):
         s = R[n]["sigmas"]
@@ -178,8 +270,8 @@ def fig_shift(meta, R):
     ax.legend(fontsize=13)
     bars(fig.add_subplot(gs[1, 1]), [a.replace("（默认）", "") for a, _ in names], [R[n]["success_mean"] for _, n in names],
          "平均编辑成功率", ylim=(0, 1.15))
-    fig.suptitle("shift 只改 σ 怎么分配：在这个任务上几乎没影响", fontsize=22, y=0.975, x=0.1, ha="left")
-    save(fig, MEDIA, "qi21_c_shift.png")
+    fig.suptitle(ttl or "shift 只改 σ 怎么分配：在这个任务上几乎没影响", fontsize=22, y=0.975, x=0.1, ha="left")
+    save(fig, fname)
 
 
 def fig_kv(meta, R):
@@ -204,7 +296,7 @@ def fig_kv(meta, R):
          f"成功率（像素非逐位相同：平均差 {k['vs_base']['mean_abs_diff']:.1f}/255）", ylim=(0, 1.15))
     sp = k["sec_per_img"] / b["sec_per_img"]
     fig.suptitle(f"条件 token 只算一次：提速 {sp:.1f}×，64 张的对错判定完全一致", fontsize=22, y=0.975, x=0.14, ha="left")
-    save(fig, MEDIA, "qi21_c_kvcache.png")
+    save(fig, "qi21_c_kvcache.png")
 
 
 def fig_causal(meta, R):
@@ -219,7 +311,7 @@ def fig_causal(meta, R):
     cv = [local_stats(1, n)["chroma"] for _, n in names]
     bars(fig.add_subplot(bot[1]), lab, cv, "彩色伪影（RGB 通道差）", fmt="{:.1f}", color=GRAY, ylim=(0, 1.25 * max(cv)))
     fig.suptitle("关掉 causal_condition：慢了一倍，画面却更干净——和预期相反", fontsize=22, y=0.975, x=0.16, ha="left")
-    save(fig, MEDIA, "qi21_c_causal.png")
+    save(fig, "qi21_c_causal.png")
 
 
 def fig_res(meta, R):
@@ -242,7 +334,7 @@ def fig_res(meta, R):
     bars(fig.add_subplot(bot[1]), ["512", "1024"], [a["sec_per_img"], b["sec_per_img"]], "每张耗时", fmt="{:.1f}s", color=GRAY,
          ylim=(0, 1.25 * b["sec_per_img"]))
     fig.suptitle(f"回到模型默认的 1024：更干净，但 token ×{b['seq']['joint'] / a['seq']['joint']:.1f}，耗时 ×{b['sec_per_img'] / a['sec_per_img']:.1f}", fontsize=22, y=0.975, x=0.18, ha="left")
-    save(fig, MEDIA, "qi21_c_resolution.png")
+    save(fig, "qi21_c_resolution.png")
 
 
 def fig_lora(meta, R):
@@ -257,10 +349,39 @@ def fig_lora(meta, R):
     ax = fig.add_subplot(bot[0]); per_task_lines(ax, xs, [R[n] for _, n in names], "LoRA 强度", note=False)
     ax.set_xticks(xs)
     ax2 = fig.add_subplot(bot[1])
-    ax2.plot(xs, [local_stats(2, n)["chroma"] for _, n in names], "-o", color=ACCENT, lw=3)
-    ax2.set_xlabel("LoRA 强度"); ax2.set_title("彩色伪影（RGB 通道差）", fontsize=17, loc="left")
+    per_task_stat(ax2, xs, 2, [n for _, n in names], "chroma")
+    ax2.set_xticks(xs); ax2.set_xlabel("LoRA 强度"); ax2.set_title("彩色伪影（RGB 通道差，越低越干净）", fontsize=17, loc="left")
     fig.suptitle("LoRA 是个旋钮：0 就是原模型；0.5 已经学会旋转和反色，彩色伪影消失", fontsize=22, y=0.975, x=0.1, ha="left")
-    save(fig, MEDIA, "qi21_c_lora_scale.png")
+    save(fig, "qi21_c_lora_scale.png")
+
+
+def fig_x0trace(meta, phase=3, ids=(11, 3)):
+    """x0_hat = x_t − σ·v at chosen steps (LoRA 1.0, 40 steps, defaults), one rot90 and one next display sample."""
+    d = pdir(phase) / "x0trace"
+    if not (d / f"{ids[0]:02d}_s01.png").exists():
+        print("skip qi21_c_lora_x0hat.png: needs x0trace/ images from your own phase-3 sweep")
+        return
+    J = json.load(open(d / "x0trace.json"))
+    steps = [1, 2, 3, 5, 10, 20, 40]
+    cols = len(steps) + 3
+    fig = plt.figure(figsize=(19.2, 6.4))
+    gs = fig.add_gridspec(len(ids), cols, hspace=0.42, wspace=0.06, left=0.1, right=0.99, top=0.84, bottom=0.06)
+    for r, i in enumerate(ids):
+        rec = J[str(i)]
+        tiles = [("输入", ref(i))] + [(f"第 {k} 步", np.asarray(Image.open(d / f"{i:02d}_s{k:02d}.png").convert("RGB"))) for k in steps] \
+            + [("最终输出", np.asarray(Image.open(d / f"{i:02d}_final.png").convert("RGB"))), ("标准答案", ref(i, "tgt"))]
+        for c, (t, im) in enumerate(tiles):
+            ax = fig.add_subplot(gs[r, c]); ax.imshow(im); ax.set_xticks([]); ax.set_yticks([])
+            for sp in ax.spines.values(): sp.set_color(LIGHT)
+            if r == 0:
+                ax.set_title(t, fontsize=16, color=ACCENT if t == "最终输出" else TEXT)
+            if 1 <= c <= len(steps):
+                ax.set_xlabel(f"σ = {rec['sigma_at_step'][str(steps[c - 1])]:.2f}", fontsize=13, color=MUTED)
+            if c == 0:
+                lab = TASK_ZH[rec["task"]] + (f"\n{rec['src_label']} → {rec['want_label']}" if rec["task"] == "next" else "")
+                ax.set_ylabel(lab, fontsize=17, color=TEXT, rotation=0, ha="right", va="center", labelpad=14)
+    fig.suptitle("每一步的 x0′ = x_t − σ·v：转 90° 第 1 步就定型；换数字前两步是一团模糊的平均，第 5 步才定成 9", fontsize=22, y=0.975, x=0.1, ha="left")
+    save(fig, "qi21_c_lora_x0hat.png")
 
 
 def main():
@@ -271,17 +392,29 @@ def main():
         fig_steps(meta, R)
         if "cfg4" in R: fig_cfg(meta, R)
         if "shift1" in R: fig_shift(meta, R)
-        if "kvoff" in R: fig_kv(meta, R)
+        if "kvoff" in R and has_images(1, "kvoff"): fig_kv(meta, R)
         if "causaloff" in R: fig_causal(meta, R)
-        if "res1024" in R: fig_res(meta, R)
+        if "res1024" in R and has_images(1, "res1024"): fig_res(meta, R)
+    elif a.phase == 3:
+        meta, R = load(3)
+        fig_cfg(meta, R, phase=3, names=[("CFG 1（默认）", "lora1.0"), ("CFG 2", "lora_cfg2"), ("CFG 4", "lora_cfg4"), ("CFG 7", "lora_cfg7")],
+                fname="qi21_c_lora_cfg.png", ttl="微调后加 CFG：75% → 81%，涨的全是「换数字」，每张图时间翻倍")
+        fig_shift(meta, R, phase=3, names=[("动态≈1.7（默认）", "lora1.0"), ("shift 1", "lora_shift1"), ("shift 3", "lora_shift3"), ("shift 6", "lora_shift6")],
+                  fname="qi21_c_lora_shift.png", ttl="微调后的 shift：40 步下仍然几乎没影响")
+        fig_x0trace(meta)
+        fig_steps(meta, R, phase=3, names=[("2 步", "lora_steps2"), ("4 步", "lora_steps4"), ("8 步", "lora_steps8"),
+                                           ("16 步", "lora_steps16"), ("40 步", "lora1.0")],
+                  fname="qi21_c_lora_steps.png", ttl="微调后，答案唯一的编辑 2 步就够；答案不唯一的「换数字」少步就糊成平均图")
     else:
         meta, R = load(2)
         fig_lora(meta, R)
         fig_steps(meta, R, phase=2, names=[("4 步", "lora1.0_steps4"), ("8 步", "lora1.0_steps8"), ("40 步", "lora1.0")],
-                  fname="qi21_c_lora_steps.png", ttl="微调后，答案唯一的编辑 4 步就够；答案不唯一的「换数字」少步就糊成平均图")
-        fig_cfg(meta, R, phase=2, names=[("CFG 1", "lora1.0"), ("CFG 4", "lora1.0_cfg4")], fname="qi21_c_lora_cfg.png",
+                  fname="qi21_c_lora_steps_p2.png", ttl="微调后，答案唯一的编辑 4 步就够；答案不唯一的「换数字」少步就糊成平均图")
+        fig_cfg(meta, R, phase=2, names=[("CFG 1", "lora1.0"), ("CFG 4", "lora1.0_cfg4")], fname="qi21_c_lora_cfg_p2.png",
                 ttl="微调后再加 CFG：77% → 81%，只有「换数字」受益，时间翻倍")
 
 
 if __name__ == "__main__":
     main()
+    if A.write_stats:
+        write_stats(A.phase, load(A.phase)[1])

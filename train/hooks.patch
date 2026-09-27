@@ -1,10 +1,25 @@
 --- a/examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
 +++ b/examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
-@@ -1725,6 +1725,24 @@
-         assert all(embeds is not None for embeds in prompt_embeds_cache), (
+@@ -613,7 +613,15 @@
+         default=1.29,
+         help="Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`.",
+     )
++    # [qie-mnist patch 5/5, part 1] Optional train-time sigma shift (experiment E). 1.0 = off = upstream behaviour.
+     parser.add_argument(
++        "--train_shift",
++        type=float,
++        default=1.0,
++        help="Shift each sampled training sigma toward high noise: sigma' = s*sigma / (1 + (s-1)*sigma), the same map"
++        " the sampler uses. 1.0 (default) keeps the upstream sampling.",
++    )
++    parser.add_argument(
+         "--optimizer",
+         type=str,
+         default="AdamW",
+@@ -1726,6 +1734,24 @@
              "Prompt embedding cache has unfilled entries."
          )
-+
+ 
 +    # [qie-mnist hook 1/4] Encode the fixed test set (prompts + condition images, probe latents) while the text
 +    # encoder and VAE are still loaded. See train/train_hooks.py.
 +    import train_hooks
@@ -22,20 +37,33 @@
 +        validation_pipeline_cls=QwenImage21ValidationPipeline,
 +        noise_scheduler=noise_scheduler_copy,
 +    )
- 
++
      # move back to cpu before deleting to ensure memory is freed see: https://github.com/huggingface/diffusers/issues/11376#issue-3008144624
      if args.cache_latents:
-@@ -1831,6 +1849,9 @@
-         while len(sigma.shape) < n_dim:
+         vae = vae.to("cpu")
+@@ -1832,6 +1858,9 @@
              sigma = sigma.unsqueeze(-1)
          return sigma
-+
+ 
 +    # [qie-mnist hook 2/4] Step-0 evaluation: the adapter's B matrices start at zero, so this is the base model.
 +    train_hooks.on_step(global_step, unwrap_model(transformer), args)
- 
++
      for epoch in range(first_epoch, args.num_train_epochs):
          transformer.train()
-@@ -2021,6 +2042,11 @@
+ 
+@@ -1889,6 +1918,11 @@
+                 # Add noise according to flow matching.
+                 # zt = (1 - texp) * x + texp * z1
+                 sigmas = get_sigmas(timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
++                # [qie-mnist patch 5/5, part 2] --train_shift s != 1: sigma' = s*sigma / (1 + (s-1)*sigma).
++                # The timestep fed to the transformer follows the shifted sigma.
++                if args.train_shift != 1.0:
++                    sigmas = args.train_shift * sigmas / (1 + (args.train_shift - 1) * sigmas)
++                    timesteps = sigmas.flatten().float() * noise_scheduler_copy.config.num_train_timesteps
+                 noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
+ 
+                 # Predict the noise residual. A batch is single-bucket, so the latent height/width are shared
+@@ -2021,6 +2055,11 @@
              logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
              progress_bar.set_postfix(**logs)
              accelerator.log(logs, step=global_step)

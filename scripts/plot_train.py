@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Figures for experiment B (LoRA training), from the hook logs written by scripts/train_lora.sh.
+"""Step 5 - figures for experiment B (training), from the hook_logs written by scripts/train_lora.sh. CPU.
 
-Usage: python scripts/plot_train.py [--src OUTPUT_DIR/hook_logs] [--out figures]
-Needs train.jsonl, probe.jsonl, val.jsonl, meta.json and val/ images for the full set. With only
-probe.jsonl + val.jsonl (as shipped in results/train/) it draws the success and task-order figures.
-Writes qi21_b_*.png.
+Deck page -> output file:
+  p.8  (Training loss)                qi21_b_loss.png           needs train.jsonl, probe.jsonl
+  p.9  (Loss by sigma)                qi21_b_probe_by_task.png  needs probe.jsonl
+  p.13 (Success rate)                 qi21_b_success.png        needs val.jsonl, probe.jsonl
+  p.14 (Before vs after training)     qi21_b_samples.png        needs meta.json and the val/ images (own runs only)
+  p.15 (Learnable vs not learnable)   qi21_b_task_order.png     needs val.jsonl, probe.jsonl
+Also writes qi21_b_loss_by_sigma.png (probe loss by sigma, not in the deck). The shipped results/train/ draws
+everything except p.14.
+
+Usage:
+  python scripts/plot_train.py                                        # from results/train/
+  python scripts/plot_train.py --src outputs/lora_b/hook_logs         # your own run (adds p.14)
+  python scripts/plot_train.py --src results/train_e_shift5 --out outputs/figures/e   # same figures for E / F
 """
 import argparse
 import json
@@ -19,9 +28,9 @@ import matplotlib.ticker  # noqa: E402,F401
 import matplotlib.pyplot as plt  # noqa: E402
 from PIL import Image  # noqa: E402
 
-_ap = argparse.ArgumentParser()
-_ap.add_argument("--src", default="results/train", help="hook_logs dir (train.jsonl, probe.jsonl, val.jsonl, ...)")
-_ap.add_argument("--out", default="figures")
+_ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+_ap.add_argument("--src", default="results/train", help="hook_logs dir (train.jsonl, probe.jsonl, val.jsonl, meta.json, val/)")
+_ap.add_argument("--out", default="outputs/figures")
 _ARGS = _ap.parse_args()
 SRC = _ARGS.src
 MEDIA = _ARGS.out
@@ -129,7 +138,7 @@ def fig_success(val, probe):
     ax.set_yticks([0, 20, 40, 60, 80, 100])
     ax.set_xlabel("训练步数")
     ax.set_ylabel("编辑成功率（%，实线）")
-    # 右轴：固定测试集 loss
+    # right axis: held-out probe loss
     ax2 = ax.twinx()
     ps = np.array([r["step"] for r in probe]); pm = np.array([r["mean"] for r in probe])
     ax2.plot(ps, pm, color=TEXT, lw=2.2, ls="--", label="测试集 loss（右轴）", zorder=2)
@@ -154,7 +163,7 @@ def fig_grid(val, meta, steps):
     vdir = os.path.join(SRC, "val")
     cols = ["参考图", "目标"] + [f"第 {s} 步" for s in steps]
     pred = {r["step"]: r["pred"] for r in val}
-    # 按任务分组：组内两行紧挨，组间留空行，任务名每组只写一次
+    # grouped by task: two rows per group, a blank row between groups, task name once per group
     groups = []
     for i in grid:
         t = meta["samples"][i]["task"]
@@ -191,7 +200,7 @@ def fig_grid(val, meta, steps):
             if first_row:
                 ax.set_title(cols[c], fontsize=15, color=TEXT)
         first_row = False
-    # 每组一个任务名，竖向居中在两行之间，并画一条组色竖条
+    # one task name per group, vertically centred on its two rows, with a coloured bar
     for t, ids in groups:
         rs = [rows.index(i) for i in ids]
         top = fig.add_subplot(gs[rs[0], 0]).get_position(); bot = fig.add_subplot(gs[rs[-1], 0]).get_position()
@@ -422,24 +431,24 @@ def fig_train_by_sigma_norm(train):
 
 def main():
     set_style()
-    if not os.path.exists(os.path.join(SRC, "train.jsonl")):
-        # Only the small summary logs are shipped (results/train/): draw the figures that need nothing else.
-        probe, val = jl("probe.jsonl"), jl("val.jsonl")
-        fig_success(val, probe)
-        print("first >=90%", fig_task_order(probe, val))
-        return
-    train, probe, val = jl("train.jsonl"), jl("probe.jsonl"), jl("val.jsonl")
-    with open(os.path.join(SRC, "meta.json")) as f:
-        meta = json.load(f)
-    fig_loss(train, probe, os.environ.get("LOSS_TITLE", "loss：尖刺来自两端的 σ，趋势在测试集 loss 上看得最清楚"))
-    drop = fig_sigma(probe, train)
+    has = lambda n: os.path.exists(os.path.join(SRC, n))  # noqa: E731
+    probe, val = jl("probe.jsonl"), jl("val.jsonl")
+    if has("train.jsonl"):
+        train = jl("train.jsonl")
+        fig_loss(train, probe, os.environ.get("LOSS_TITLE", "loss：尖刺来自两端的 σ，趋势在测试集 loss 上看得最清楚"))
+        drop = fig_sigma(probe, train)
+        print("sigma drop %", {k: round(v, 1) for k, v in drop.items()})
+    fig_probe_by_task(probe)
     fig_success(val, probe)
-    vs = [r["step"] for r in val]
-    steps = [vs[0], vs[len(vs) // 4], vs[len(vs) // 2], vs[-1]]
-    fig_grid(val, meta, steps)
     first = fig_task_order(probe, val)
-    print("sigma drop %", {k: round(v, 1) for k, v in drop.items()})
     print("first >=90%", first)
+    if has("meta.json") and has("val"):
+        with open(os.path.join(SRC, "meta.json")) as f:
+            meta = json.load(f)
+        vs = [r["step"] for r in val]
+        fig_grid(val, meta, [vs[0], vs[len(vs) // 4], vs[len(vs) // 2], vs[-1]])
+    else:
+        print("skip qi21_b_samples.png (page 14): needs meta.json + val/ images from your own run; see deck/media/")
 
 
 if __name__ == "__main__":
