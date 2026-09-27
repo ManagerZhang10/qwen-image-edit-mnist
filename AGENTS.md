@@ -7,7 +7,7 @@ Shared rules for any coding agent working in this repository.
 - `src/qie_mnist/`: task data (`data.py`: tasks, `make_pairs(..., tasks=, next_target=)`, `next_prototypes()`), scoring
   (`evaluate.py`), probe loss (`probe.py`), plot style (`plotting.py`).
 - `scripts/`: one entry point per step, run from the repo root. Each script's docstring names its step and the deck
-  pages it serves; the README table "讲义页 → 脚本 → 结果文件" is the full map (keep it in sync when adding figures).
+  pages it serves; the README table "Deck page → script → result file" is the full map (keep it in sync when adding figures).
   - pipeline: `prepare_data.py` (`--tasks`, `--next-target`) → `train_lora.sh` (`--train-shift`, `--smoke`, ...)
     → `infer.py` (`edit`, `sweep --phase 1|2|3`) → `summarize_results.py`
   - analysis: `trace_forward.py` (A), `probe_loss.py` (D); figures: `plot_*.py` (default output `outputs/figures/`,
@@ -23,10 +23,11 @@ Shared rules for any coding agent working in this repository.
 
 ## Language
 
-- Code comments, docstrings, script headers and argparse help in `.py` / `.sh` are English. Refer to the deck as
-  "deck p.N (English page title)", e.g. "deck p.16 (CFG)". Figure labels and the printed result tables stay Chinese
-  to match the deck and README.
-- `README.md`, `deck/README.md` and the deck itself are Chinese.
+- The deck (`deck/practice.html`, `deck/src/*.html`) is Chinese. Everything else in the repo is English: README,
+  `deck/README.md`, code comments, docstrings, CLI help and printed output.
+- Refer to deck pages as "deck p.N (English title)", e.g. "deck p.16 (CFG)".
+- Two exceptions stay Chinese: the labels inside figures (they must match `deck/media/`) and the four fixed task
+  instructions (they are the data).
 
 ## How to run
 
