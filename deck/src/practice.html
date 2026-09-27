@@ -16,7 +16,7 @@
     <div class="notes tight" style="flex:none;flex-direction:row;gap:20px;margin-top:26px;align-items:stretch">
       <div class="note" style="flex:1"><b>数据</b>训练集 4 × 500 = 2000 对，测试集 4 × 16 = 64 对。28 × 28 的数字放大到 512 × 512，转成 RGB。</div>
       <div class="note" style="flex:1"><b>为什么做编辑</b>参考图同时进 Qwen3-VL 和 VAE、前缀按 t = 0 调制、KV cache，这些 2.1 的特色只有编辑任务才用得上。</div>
-      <div class="note" style="flex:1"><b>怎么打分</b>输出缩回 28 × 28，转回来 / 反色回来，交给小 CNN 分类（MNIST 测试准确率 98.8%），数字对上算成功；旋转和反色另算像素 IoU。</div>
+      <div class="note" style="flex:1"><b>怎么打分</b>把输出变回正立、黑底白字，交给分类器认数字，认对了算成功；旋转和反色另算像素 IoU。细节见第 <span data-pageof="成功率怎么算">?</span> 页。</div>
       <div class="note" style="flex:1"><b>为什么是这四个</b>旋转、反色的答案唯一；「下一个数字」要懂语义，答案是另一个人写的 n + 1，不唯一。</div>
     </div>
 </section>
@@ -172,6 +172,20 @@
   </div>
 </section>
 
+<section class="slide" data-sec="05 生图效果" data-title="成功率怎么算">
+  <div class="kicker"><b>05</b>生图效果 · 测试集每种编辑 16 张 · 分类器是在 MNIST 训练集上训的小网络，测试集准确率 98.8% · 图中是第 3000 步 LoRA 的真实输出</div>
+  <h1>成功率怎么算：<span class="thin">先变回正立，</span><span class="acc">再让分类器认数字</span></h1>
+  <div class="split">
+    <div class="fig card"><img src="media/qi21_c_scoring.png" alt=""></div>
+    <div class="notes tight">
+      <div class="note"><b>为什么先做逆变换</b>分类器只见过黑底白字、正立的数字，转过的 4、反色的 6 它都认不出。所以先按任务把输出变回去：转 90° 的逆时针转回来，转 180° 的再转一次，反色的再反一次。</div>
+      <div class="note"><b>怎么判</b>认出的数字等于期望数字就算成功：旋转和反色期望原数字，换数字期望 n + 1（9 → 0）。16 张里成功的比例就是这种编辑的成功率。</div>
+      <div class="note"><b>换数字只看数字，不看写法</b>标准答案是另一个人写的 n + 1，本来就不唯一；画出来是 n + 1 就算对。旋转和反色另算像素 IoU，看是不是逐像素变换。</div>
+      <div class="note"><b>分类器也会判错</b>98.8% 不是 100%，笔画潦草的输出偶尔会被认错，比如有一张 9 被认成了 8。每种编辑只有 16 张，一张就是 6 个点。</div>
+    </div>
+  </div>
+</section>
+
 <section class="slide" data-sec="05 生图效果" data-title="成功率">
   <div class="kicker"><b>05</b>生图效果 · 每 200 步在测试集上生图一次，分类器判定成败</div>
   <h1>loss 已经平了，<span class="acc">成功率才台阶式跳上去</span></h1>
@@ -212,40 +226,28 @@
     </div>
 </section>
 
-<section class="slide" data-sec="05 生图效果" data-title="每一步的 x0_hat">
-  <div class="kicker"><b>05</b>生图效果 · 推理过程 · 用真实权重跑一次编辑前向，逐行记录张量 · 数字 5 +「顺时针旋转 90 度」，512²，40 步</div>
-  <h1>每一步都能预估终点：<span class="acc">第 5 步就定型</span>，<span class="thin">后面只修细节</span></h1>
-  <div class="fig card"><img src="media/qi21_a_x0hat.png" alt=""></div>
-    <div class="notes tight" style="flex:none;flex-direction:row;gap:20px;margin-top:26px;align-items:stretch">
-      <div class="note" style="flex:1"><b>怎么预估</b>x0′ = x_t − σ · v：假设速度不再变，沿当前的 v 一步直走到 σ = 0。它是模型此刻对终点的最好猜测（条件均值），不是真正采样的终点。</div>
-      <div class="note" style="flex:1"><b>σ 表</b>1024 个目标 token 算出 μ = 0.54，40 个 σ 从 1.0 降到 0.02，最后补 0；前面密、后面疏。</div>
-      <div class="note" style="flex:1"><b>第 1 步看不出东西</b>σ = 1 时 x0′ 几乎全黑，只有一小团色块；到第 5 步（σ = 0.94）已经是转好的 5。</div>
-      <div class="note" style="flex:1"><b>判对了，但不是真旋转</b>零样本就被分类器判成功，和标准答案的像素 IoU 却只有 0.24：模型重画了一个转过来的 5，不是逐像素旋转。</div>
-    </div>
-</section>
-
 <section class="slide" data-sec="05 生图效果" data-title="CFG">
-  <div class="kicker"><b>05</b>生图效果 · 推理设置 · 底模、同一批 64 个输入和噪声（每种编辑 16 个），只改一个推理设置 · 负向提示词为空</div>
-  <h1>CFG &gt; 1 让旋转更听话：<span class="acc">47% → 61%</span><span class="thin">，但慢一倍</span></h1>
+  <div class="kicker"><b>05</b>生图效果 · 推理设置 · 第 3000 步的 LoRA，同一批 64 个输入和噪声（每种编辑 16 个），只改 CFG · 负向提示词为空</div>
+  <h1>调 CFG：只帮「换数字」<span class="acc">6% → 31%</span><span class="thin">，但慢一倍</span></h1>
   <div class="split">
-    <div class="fig card"><img src="media/qi21_c_cfg.png" alt=""></div>
+    <div class="fig card"><img src="media/qi21_c_lora_cfg.png" alt=""></div>
     <div class="notes tight">
       <div class="note"><b>公式</b>v = v_neg + s · (v_cond − v_neg)：v_cond 带指令和参考图，v_neg 用空负向提示词，每步两次前向。s = 1 就是 v_cond（2.1 默认），s &gt; 1 沿「条件带来的差」多走几倍；2.1 不缩范数。</div>
-      <div class="note"><b>旋转明显变好</b>顺时针 90°：69% → 94%；180°：62% → 94%。默认设置下偶尔出现的紫绿色块也少了。</div>
-      <div class="note"><b>太大开始出问题</b>CFG 7 的少数图冒出色块；耗时从 2.6 s 翻到 5.1 s。</div>
-      <div class="note"><b>「下一个数字」不受影响</b>底模把指令里的「9 变成 0」当文字画出来，CFG 放大的也是这个理解，成功率一直在 25% 左右。</div>
+      <div class="note"><b>确定的三个任务已经饱和</b>转 90° 和 180° 都是 100%，反色 94%，CFG 调到多少都不变，IoU 也一直在 0.94–0.99。</div>
+      <div class="note"><b>换数字：6% → 19% → 31% → 31%</b>对应 CFG 1 / 2 / 4 / 7；照抄原数字的比例从 12% 降到 0。每种编辑只有 16 个样本，差一个样本就是 6 个点。</div>
+      <div class="note"><b>代价</b>每张从 2.3 s 翻到 4.6 s。彩色伪影反而从 1.6 降到 0.7，CFG 7 也没冒色块。</div>
     </div>
   </div>
 </section>
 
 <section class="slide" data-sec="05 生图效果" data-title="shift">
-  <div class="kicker"><b>05</b>生图效果 · 推理设置 · 底模、同一批 64 个输入和噪声（每种编辑 16 个），只改一个推理设置 · 40 步，关掉动态 shift 改成固定值</div>
-  <h1>shift 只改 σ 怎么分配：<span class="acc">40 步下几乎没影响</span></h1>
+  <div class="kicker"><b>05</b>生图效果 · 推理设置 · 第 3000 步的 LoRA，同一批 64 个输入和噪声（每种编辑 16 个）· 40 步，关掉动态 shift 改成固定值</div>
+  <h1>调 σ 分布（shift）：<span class="acc">40 步下几乎没影响</span></h1>
   <div class="split">
-    <div class="fig card"><img src="media/qi21_c_shift.png" alt=""></div>
+    <div class="fig card"><img src="media/qi21_c_lora_shift.png" alt=""></div>
     <div class="notes tight">
       <div class="note"><b>怎么改的</b>关掉动态 shift，改成固定的 shift = s，最小 σ 仍停在 0.02。默认的动态 shift 在 512² 下约等于 1.71。</div>
-      <div class="note"><b>结果</b>shift 1 / 默认 / 3 / 6：成功率 45% / 47% / 48% / 47%，在 64 个样本的误差范围内。</div>
+      <div class="note"><b>结果</b>shift 1 / 默认 / 3 / 6：成功率 75% / 75% / 77% / 77%。差别全在「换数字」的 1 到 2 个样本，另外三个任务一个都没变。</div>
       <div class="note"><b>为什么没影响</b>40 步足够密，σ 怎么分配都能把轨迹走完；shift 的作用要在步数少、分辨率高时才明显。</div>
       <div class="note"><b>没跑的组合</b>少步数 × 不同 shift 这次没测，不能外推。</div>
     </div>
@@ -254,27 +256,27 @@
 
 <section class="slide" data-sec="05 生图效果" data-title="LoRA 强度">
   <div class="kicker"><b>05</b>生图效果 · 推理设置 · 第 3000 步的 LoRA，同一批 64 个输入和噪声 · 加载 LoRA 后按比例缩放它的输出</div>
-  <h1>LoRA 是个旋钮：<span class="thin">0 就是原模型，</span><span class="acc">0.5 已经够用</span></h1>
+  <h1>调 LoRA 强度：<span class="thin">0 就是原模型，</span><span class="acc">0.5 已经够用</span></h1>
   <div class="split">
     <div class="fig card"><img src="media/qi21_c_lora_scale.png" alt=""></div>
     <div class="notes tight">
       <div class="note"><b>0 = 原模型</b>强度 0 的输出和底模逐像素相同：LoRA 只是加在原权重上的一个增量，关掉就回到原样。</div>
       <div class="note"><b>0.5 就学会了</b>成功率 47% → 81%：两种旋转 100%，反色 94%（底模一次都没做对），紫绿色块全部消失。</div>
       <div class="note"><b>调大反而伤语义</b>强度 0.5 / 1.0 / 1.5 时「下一个数字」31% / 12% / 0%，其余三个任务不变：过强的 LoRA 把「照着参考图变换」推过了头。</div>
-      <div class="note"><b>再加 CFG 4</b>77% → 81%，涨的全是「下一个数字」（12% → 31%），耗时翻倍。</div>
+      <div class="note"><b>右下小图：彩色伪影</b>MNIST 只有黑白灰，出现颜色就是画坏了。把每个像素 RGB 三个通道的最大差取平均：强度 0 时反色 60、转 180° 33、换数字 10（底模冒出紫绿色块，见 180° 那格），转 90° 本来就干净；0.5 起四个任务都降到 2 以下。</div>
     </div>
   </div>
 </section>
 
-<section class="slide" data-sec="05 生图效果" data-title="微调后的步数">
-  <div class="kicker"><b>05</b>生图效果 · 推理设置 · 第 3000 步的 LoRA，同一批 64 个输入和噪声 · LoRA 强度 1.0，只改采样步数</div>
-  <h1>答案唯一的编辑 <span class="acc">4 步就够</span>，<span class="thin">答案不唯一的糊成平均图</span></h1>
+<section class="slide" data-sec="05 生图效果" data-title="采样步数">
+  <div class="kicker"><b>05</b>生图效果 · 推理设置 · 第 3000 步的 LoRA，同一批 64 个输入和噪声（每种编辑 16 个）· LoRA 强度 1.0，只改采样步数</div>
+  <h1>调采样步数：答案唯一的 <span class="acc">2 步就够</span><span class="thin">，换数字糊成平均图</span></h1>
   <div class="split">
     <div class="fig card"><img src="media/qi21_c_lora_steps.png" alt=""></div>
     <div class="notes tight">
-      <div class="note"><b>4 步 = 40 步</b>两种旋转、反色在 4 步时成功率和 40 步一样，每张 0.45 s，快 6.4 倍。</div>
-      <div class="note"><b>「下一个数字」4 步是一团糊</b>目标是另一个人写的 n + 1，可能的答案很多；少步时每一步落在这些答案的平均上，出来是一团模糊的影子。</div>
-      <div class="note"><b>和底模对照</b>不加 LoRA 的底模 2–4 步所有任务都又暗又糊；微调后答案唯一的任务条件分布变得很窄，平均图就是答案本身。</div>
+      <div class="note"><b>2 步 = 40 步</b>两种旋转 100%、反色 94%，从 2 步到 40 步一个不差；每张 0.3 s 对 2.3 s，快 8 倍。</div>
+      <div class="note"><b>「下一个数字」少步是一团糊</b>目标是另一个人写的 n + 1，可能的答案很多；少步时每一步落在这些答案的平均上，出来是一团模糊的影子，16 步起才画成一个具体的 9。</div>
+      <div class="note"><b>右下小图：笔画亮度</b>不用分类器，直接量像素：取每张图最亮那 1% 像素的亮度（反色先反回来），按任务分开画。发灰的只有「换数字」：2 步 43%、4 步 71%、8 步起 97%；另外三个任务 2 步就接近 100%。</div>
       <div class="note"><b>所以少步靠什么</b>让条件分布变窄（微调到具体任务）或专门蒸馏；只改采样器救不了答案本来就多的任务。</div>
     </div>
   </div>
