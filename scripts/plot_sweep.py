@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""第 5 步 · 画图（实验 C：推理设置扫描）：从 scripts/infer.py sweep 的输出画讲义推理设置那几页。CPU。
+"""Step 5 - figures for experiment C (inference-setting sweeps), from scripts/infer.py sweep output. CPU.
 
-讲义页 → 输出文件：
-  第 16 页 CFG        qi21_c_lora_cfg.png     --phase 3
-  第 17 页 shift      qi21_c_lora_shift.png   --phase 3
-  第 18 页 LoRA 强度  qi21_c_lora_scale.png   --phase 2（另出 qi21_c_lora_steps_p2.png、qi21_c_lora_cfg_p2.png）
-  第 19 页 采样步数   qi21_c_lora_steps.png   --phase 3（另出 x0′ 轨迹 qi21_c_lora_x0hat.png，讲义未用）
-  --phase 1：底模的 qi21_c_{steps,cfg,shift,kvcache,causal,resolution}.png（讲义未用）
+Deck page -> output file:
+  p.16 (CFG)             qi21_c_lora_cfg.png     --phase 3
+  p.17 (Shift)           qi21_c_lora_shift.png   --phase 3
+  p.18 (LoRA scale)      qi21_c_lora_scale.png   --phase 2 (also qi21_c_lora_steps_p2.png, qi21_c_lora_cfg_p2.png)
+  p.19 (Sampling steps)  qi21_c_lora_steps.png   --phase 3 (also the x0' trace qi21_c_lora_x0hat.png, not in the deck)
+  --phase 1: base-model qi21_c_{steps,cfg,shift,kvcache,causal,resolution}.png (not in the deck)
 
-每张图上半部分是同一批输入在各配置下的缩略图，下半部分是成功率 / 像素统计 / 耗时。
-- 用自己跑的输出（--src 下有 phase<N>/images/）：整张图都能画出来，像素统计从 256 px 缩略图现算。
-- 只用仓库附带的 results/sweep/（默认）：没有图像，缩略图位置换成一行提示，曲线和柱状图照常画；
-  像素统计读 phase<N>/image_stats.json（由原始输出按同一算法算好）。需要缩略图的 kvcache / resolution / x0′ 图会跳过。
+The top half of each figure shows the same inputs under each config; the bottom half shows success rate, pixel
+statistics and time.
+- With your own outputs (--src holding phase<N>/images/): the full figure; pixel statistics are computed from the
+  256 px thumbnails.
+- With the shipped results/sweep/ only (default): no images, so the thumbnail block becomes a one-line note while the
+  curves and bars are drawn as usual; pixel statistics come from phase<N>/image_stats.json (computed from the original
+  outputs with the same code). The kvcache / resolution / x0' figures need thumbnails and are skipped.
 
-用法：
-  python scripts/plot_sweep.py --phase 3                       # 读 results/sweep/
+Usage:
+  python scripts/plot_sweep.py --phase 3                       # from results/sweep/
   python scripts/plot_sweep.py --phase 2
-  python scripts/plot_sweep.py --phase 3 --src outputs/sweep   # 自己的扫描输出（含 phase3/images/）
-  python scripts/plot_sweep.py --phase 3 --src outputs/sweep --write-stats   # 顺便写 image_stats.json
+  python scripts/plot_sweep.py --phase 3 --src outputs/sweep   # your own sweep outputs (with phase3/images/)
+  python scripts/plot_sweep.py --phase 3 --src outputs/sweep --write-stats   # also write image_stats.json
 """
 from __future__ import annotations
 
@@ -33,9 +36,9 @@ from qie_mnist.plotting import save as _save
 
 _ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 _ap.add_argument("--phase", type=int, default=3, choices=[1, 2, 3])
-_ap.add_argument("--src", default="results/sweep", help="含 phase1/ phase2/ phase3/ 的目录")
+_ap.add_argument("--src", default="results/sweep", help="dir holding phase1/ phase2/ phase3/")
 _ap.add_argument("--out", default="outputs/figures")
-_ap.add_argument("--write-stats", action="store_true", help="把按任务的像素统计写到 phase<N>/image_stats.json")
+_ap.add_argument("--write-stats", action="store_true", help="write the per-task pixel statistics to phase<N>/image_stats.json")
 A = _ap.parse_args()
 OUT = Path(A.src)
 MEDIA = Path(A.out)
@@ -50,7 +53,7 @@ def pdir(phase):
 
 
 def eval_tasks(phase):
-    """测试集每个下标对应的任务（各轮的 eval_set.json 相同；缺了就用第 1 轮的）。"""
+    """Task of each test index (eval_set.json is the same in every phase; falls back to phase 1's)."""
     for p in (pdir(phase), pdir(1)):
         if (p / "eval_set.json").exists():
             return [e["task"] for e in json.load(open(p / "eval_set.json"))]
@@ -69,10 +72,10 @@ SERIES = [ACCENT, "#5E9EF0", "#A7C8F5", GRAY, "#1D1D1F"]
 
 
 def _compute_stats(phase, name, task=None):
-    """从 256 px 缩略图算（全部 64 张，或某个任务的 16 张）：
-    stroke_blur：非背景像素里中间灰的比例（边缘发虚 / 笔画被平均）；peak：笔画最亮处（第 99 百分位）亮度，
-    发暗 = 被平均掉的「平均图」；chroma：RGB 三通道差的平均（MNIST 只有灰度，有颜色就是伪影）。
-    反色任务的输出是白底黑字，先反回来再算 blur / peak（否则 peak 只是白背景）。"""
+    """From the saved 256 px outputs, over all 64 inputs or one task's 16. stroke_blur: share of mid-gray among
+    non-background pixels (soft edges / averaged strokes); peak: 99th-percentile stroke brightness (dim = washed-out
+    mean image); chroma: mean RGB spread (MNIST is gray, so any colour is an artefact). Invert outputs are
+    black-on-white, so they are flipped back before blur / peak (otherwise peak is just the white background)."""
     d = pdir(phase) / "images" / name
     tasks = eval_tasks(phase)
     b, m, pk, ch = [], [], [], []
@@ -91,7 +94,8 @@ def _compute_stats(phase, name, task=None):
 
 
 def local_stats(phase, name, task=None):
-    """有缩略图就现算，否则读 phase<N>/image_stats.json（键：配置名 → "all" / 任务名 → 三个统计量）。"""
+    """Computed from the thumbnails when present, else read from phase<N>/image_stats.json
+    (config name -> "all" / task name -> the three statistics)."""
     if has_images(phase, name):
         return _compute_stats(phase, name, task)
     if phase not in _STATS_CACHE:
@@ -154,8 +158,8 @@ def pick_rows(meta, per_task=1):
 
 
 def strip(fig, gs_top, rows, cols, phase):
-    """cols: list of (title, name|'_ref'|'_tgt'). Draws a rows×cols image grid into gs_top.
-    没有缩略图（只用仓库附带的 results/）时，这一块换成一行提示。"""
+    """cols: list of (title, name|'_ref'|'_tgt'). Draws a rows x cols image grid into gs_top.
+    Without thumbnails (only the shipped results/), the block becomes a one-line note."""
     if not all(has_images(phase, n) for _, n in cols if not n.startswith("_")):
         ax = fig.add_subplot(gs_top); ax.axis("off")
         ax.text(0.5, 0.55, "缩略图需要自己跑的扫描输出（scripts/infer.py sweep）", ha="center", va="center",

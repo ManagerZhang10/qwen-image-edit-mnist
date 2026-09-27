@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""第 5 步 · 画图（成功率怎么算）：用第 3 轮扫描里 LoRA 1.0（40 步、默认设置）的真实输出，演示评测的每一步。CPU。
+"""Step 5 - figure "how success is scored", from real outputs of the phase-3 sweep (LoRA 1.0, 40 steps, defaults). CPU.
 
-讲义页 → 输出文件：第 12 页「成功率怎么算」 qi21_c_scoring.png
+Deck page -> output file: p.12 (How success is scored)  qi21_c_scoring.png
 
-每张输出：缩回 28×28 灰度 → 逆变换（转回来 / 反色回来；「下一个数字」不变）→ MNIST 分类器 → 和期望数字比。
-步骤与 qie_mnist.evaluate.evaluate 完全相同（from_pil、undo、classify）。
-需要自己跑的 `infer.py sweep --phase 3` 输出（images/lora1.0/ 下的 256 px 图）；仓库不附带图像，成图见 deck/media/。
+Per output: shrink to 28x28 gray -> undo the edit (rotate back / invert back; "next" is left as is) -> MNIST
+classifier -> compare with the wanted digit. Exactly the steps of qie_mnist.evaluate.evaluate (from_pil, undo, classify).
+Needs your own `infer.py sweep --phase 3` output (256 px images under images/lora1.0/); the repo ships no images,
+the finished figure is in deck/media/.
 
-用法：python scripts/plot_scoring.py --src outputs/sweep/phase3 [--out outputs/figures] [--mnist-root data]
+Usage: python scripts/plot_scoring.py --src outputs/sweep/phase3 [--out outputs/figures] [--mnist-root data]
 """
 import argparse
 import json
@@ -21,13 +22,13 @@ from qie_mnist import evaluate as E
 from qie_mnist.plotting import ACCENT, LIGHT, MUTED, TEXT, plt, save, set_style
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument("--src", required=True, help="infer.py sweep --phase 3 的输出目录（含 eval_set.json、images/lora1.0/）")
-ap.add_argument("--config", default="lora1.0", help="用哪个配置的输出（默认 lora1.0）")
+ap.add_argument("--src", required=True, help="output dir of infer.py sweep --phase 3 (eval_set.json, images/lora1.0/)")
+ap.add_argument("--config", default="lora1.0", help="which config's outputs to use (default lora1.0)")
 ap.add_argument("--out", default="outputs/figures")
 ap.add_argument("--mnist-root", default=None)
 A = ap.parse_args()
 SRC = Path(A.src)
-# 每行：测试集下标、逆变换说明（每种编辑一张，next 两张：一张对、一张错）
+# rows: test index and how the edit is undone (one per edit, two for next: one right, one wrong)
 ROWS = [(8, "逆时针转回 90°"), (0, "再转 180°"), (5, "再反色一次"), (14, "不做逆变换"), (26, "不做逆变换")]
 TASK_ZH = {"rot90": "顺时针转 90°", "rot180": "旋转 180°", "next": "换成下一个数字", "invert": "黑白反色"}
 RED = "#D0342C"

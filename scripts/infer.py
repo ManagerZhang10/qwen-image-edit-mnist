@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""第 3 步 · 推理与推理设置扫描（实验 C）：单张编辑，或在固定测试集上扫一遍推理配置并打分。
+"""Step 3 - inference and inference-setting sweeps (experiment C): one edit, or a sweep of inference configs on the
+fixed test set, scored.
 
-讲义：第 12 页「成功率怎么算」（评测口径，见 qie_mnist/evaluate.py）、第 16 页「CFG」、第 17 页「shift」、
-第 18 页「LoRA 强度」（--phase 2）、第 19 页「采样步数」（--phase 3）。需要一张 >= 40 GB 显存的 CUDA 卡。
+Deck: p.12 (How success is scored; scoring in qie_mnist/evaluate.py), p.16 (CFG), p.17 (Shift),
+p.18 (LoRA scale, --phase 2), p.19 (Sampling steps, --phase 3). Needs one CUDA GPU with >= 40 GB.
 
-单张编辑（按任务选一张测试图，或用自己的图 + 指令）：
+Single edit (a test pair picked by task, or your own image + instruction):
   python scripts/infer.py edit --model MODEL_DIR --task rot90 --index 0 --out outputs/edit
   python scripts/infer.py edit --model MODEL_DIR --image my.png --prompt "把图片旋转 180 度" --lora LORA_DIR
 
-扫描（每个配置都用同一批 16 × 4 张测试图、同一份逐样本噪声：样本 i 用种子 seed0 + i）：
-  python scripts/infer.py sweep --model MODEL_DIR --phase 1 --out outputs/sweep/phase1                 # 底模的旋钮
-  python scripts/infer.py sweep --model MODEL_DIR --phase 2 --lora LORA_DIR --out outputs/sweep/phase2  # LoRA 强度 0/0.5/1/1.5
-  python scripts/infer.py sweep --model MODEL_DIR --phase 3 --lora LORA_DIR --out outputs/sweep/phase3  # 带 LoRA 的 CFG/shift/步数 + x0′ 轨迹
-每个配置写 images/<name>/（256 px 输出、out28.npy）和 metrics_phase<N>.json（成功率、IoU、耗时、像素统计、σ 表）。
-第 3 轮另写 x0trace/：LoRA 1.0、40 步默认设置下，第 X0_STEPS 步的一步预测 x0′ = x_t − σ·v 解码图和 x0trace.json。
+Sweep (every config sees the same 16 x 4 test pairs and the same per-sample noise: sample i uses seed seed0 + i):
+  python scripts/infer.py sweep --model MODEL_DIR --phase 1 --out outputs/sweep/phase1                 # base-model knobs
+  python scripts/infer.py sweep --model MODEL_DIR --phase 2 --lora LORA_DIR --out outputs/sweep/phase2  # LoRA scale 0/0.5/1/1.5
+  python scripts/infer.py sweep --model MODEL_DIR --phase 3 --lora LORA_DIR --out outputs/sweep/phase3  # CFG/shift/steps with the LoRA + x0' trace
+Each config writes images/<name>/ (256 px outputs, out28.npy) and an entry in metrics_phase<N>.json (success, IoU,
+time, pixel stats, sigma table). Phase 3 also writes x0trace/: with LoRA 1.0 and 40 default steps, the decoded
+one-step prediction x0' = x_t - sigma * v at the steps in X0_STEPS, plus x0trace.json.
 
 Baseline = pipeline defaults (40 steps, true_cfg_scale 1, dynamic shift mu, use_kv_cache=True,
 causal_condition=True), except output_resolution=512 (the task resolution; the pipeline default is 1024).
@@ -70,7 +72,7 @@ PHASE2 = [
     C("lora1.0_steps8", "lora_steps", steps=8, lora=1.0),
     C("lora1.0_cfg4", "lora_cfg", cfg=4.0, lora=1.0),
 ]
-# 第 3 轮：第 1 轮的旋钮再扫一遍，但带上 LoRA（强度 1.0）；讲义推理设置那几页（第 16、17、19 页）用的就是这一轮。
+# Phase 3: phase 1's knobs again, with the LoRA at scale 1.0. The deck's inference pages (p.16, p.17, p.19) use this.
 PHASE3 = [
     C("lora1.0", "lora_baseline", lora=1.0),
     C("lora_cfg2", "lora_cfg", cfg=2.0, lora=1.0), C("lora_cfg4", "lora_cfg", cfg=4.0, lora=1.0),
@@ -81,7 +83,7 @@ PHASE3 = [
     C("lora_steps8", "lora_steps", steps=8, lora=1.0), C("lora_steps16", "lora_steps", steps=16, lora=1.0),
 ]
 PHASES = {1: PHASE1, 2: PHASE2, 3: PHASE3}
-X0_STEPS = [1, 2, 3, 5, 10, 20, 40]  # 第 3 轮 x0′ 轨迹：解码这些步（从 1 数）的一步预测
+X0_STEPS = [1, 2, 3, 5, 10, 20, 40]  # phase-3 x0' trace: decode the one-step prediction at these steps (1-indexed)
 
 
 def img_stats(arr):
@@ -125,7 +127,7 @@ def edit(pipe, image, prompt, steps=40, cfg=1.0, res=RES, kv=True, seed=0):
 
 @torch.no_grad()
 def decode_packed(pipe, packed, res=RES):
-    """打包的归一化潜变量 (1, N, 64) → 反归一化 → VAE 解码 → RGB PIL。"""
+    """Packed normalized latents (1, N, 64) -> de-normalize -> VAE decode -> RGB PIL."""
     vae = pipe.vae
     z = vae.config.z_dim
     lat = pipe._unpack_latents(packed, res, res, pipe.vae_scale_factor).float()
@@ -137,11 +139,12 @@ def decode_packed(pipe, packed, res=RES):
 
 
 def x0_trace(pipe, samples, display, out, base_sched_cfg, seed0):
-    """第 3 轮附带：LoRA 1.0、40 步默认设置，记录每一步的一步预测 x0′。
+    """Phase-3 extra: record the one-step prediction x0' at every step (LoRA 1.0, 40 steps, defaults).
 
-    初始噪声和扫描完全相同（randn_tensor + 该样本的种子 seed0 + i）。相邻两步的潜变量给出这一步用的速度
-    v_i = (x_{i+1} − x_i) / (σ_{i+1} − σ_i)，于是 x0′_i = x_i − σ_i · v_i；只解码 X0_STEPS 这几步。
-    每个任务取展示样本里的 rot90 和 next（各 2 张）。
+    The initial noise is exactly the sweep's (randn_tensor with the sample's seed seed0 + i). Two consecutive latents
+    give the velocity used in that step, v_i = (x_{i+1} - x_i) / (sigma_{i+1} - sigma_i), so
+    x0'_i = x_i - sigma_i * v_i; only the steps in X0_STEPS are decoded. Uses the rot90 and next display samples
+    (2 each).
     """
     from diffusers import FlowMatchEulerDiscreteScheduler
     from diffusers.utils.torch_utils import randn_tensor
@@ -351,15 +354,15 @@ def main():
     s.add_argument("--model", required=True)
     s.add_argument("--out", required=True)
     s.add_argument("--phase", type=int, default=1, choices=[1, 2, 3],
-                   help="1: 底模的旋钮；2: LoRA 强度 + 少量组合；3: 带 LoRA 的 CFG / shift / 步数 + x0′ 轨迹")
+                   help="1: base-model knobs; 2: LoRA scale + a few combinations; 3: CFG / shift / steps with the LoRA + x0' trace")
     s.add_argument("--lora", default=None)
     s.add_argument("--only", default="", help="comma-separated config names")
     s.add_argument("--n-per-task", type=int, default=16)
     s.add_argument("--seed0", type=int, default=1000, help="sample i uses torch.Generator('cuda').manual_seed(seed0+i)")
-    s.add_argument("--max-minutes", type=float, default=75, help="时间预算，超时后跳过剩下的配置")
-    s.add_argument("--no-x0-trace", action="store_true", help="第 3 轮不跑 x0′ 轨迹")
+    s.add_argument("--max-minutes", type=float, default=75, help="time budget; remaining configs are skipped once it is exceeded")
+    s.add_argument("--no-x0-trace", action="store_true", help="phase 3: skip the x0' trace")
     s.add_argument("--next-target", default="random", choices=D.NEXT_TARGETS,
-                   help="测试集 next 的标准答案（只影响展示用的 _tgt 图；成功率只看数字）；评测实验 F 的 LoRA 时用 proto")
+                   help="next ground truth of the test set (only the displayed _tgt images; success only checks the digit); use proto for experiment F's LoRA")
     a = ap.parse_args()
     cmd_edit(a) if a.cmd == "edit" else cmd_sweep(a)
 

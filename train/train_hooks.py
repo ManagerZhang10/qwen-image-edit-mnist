@@ -1,7 +1,8 @@
-"""训练挂钩：给 vendored 的 diffusers Qwen-Image 2.1 img2img LoRA 训练脚本加日志、固定测试集 probe 和验证。
+"""Training hooks: logging, the fixed held-out probe and periodic validation for the vendored diffusers
+Qwen-Image 2.1 img2img LoRA trainer.
 
-讲义：第 8 页「训练 loss」（train.jsonl）、第 9 页「按 σ 看 loss」（probe.jsonl）、
-第 13 页「成功率」和第 14 页「训练前后对照」（val.jsonl、val/step_*/）。
+Deck: p.8 (Training loss) <- train.jsonl, p.9 (Loss by sigma) <- probe.jsonl,
+p.13 (Success rate) and p.14 (Before vs after training) <- val.jsonl, val/step_*/.
 
 The trainer (train_dreambooth_lora_qwenimage21_img2img.py, diffusers e0abab8) calls into this module at four
 marked points ("[qie-mnist hook n/4]"). Nothing here changes what is trained: the hooks only read the model,

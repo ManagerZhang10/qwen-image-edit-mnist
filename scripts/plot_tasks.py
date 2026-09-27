@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""第 5 步 · 画图（任务示例）：四种编辑的参考图 → 目标图。CPU，不需要任何实验输出。
+"""Step 5 - figures of the task examples: reference -> target for the four edits. CPU, needs no experiment output.
 
-讲义页 → 输出文件：
-  第 1 页 封面图条            practice_strip.png（一行四组）
-  第 2 页 四种编辑任务        qi21_tasks.png（4 行，带固定指令）
+Deck page -> output file:
+  p.1 (Cover)            practice_strip.png (one row, four pairs)
+  p.2 (Four edit tasks)  qi21_tasks.png (4 rows with the fixed instructions)
 
-用法：python scripts/plot_tasks.py [--out outputs/figures] [--mnist-root data]
+Usage: python scripts/plot_tasks.py [--out outputs/figures] [--mnist-root data]
 """
 import argparse
 
@@ -20,7 +20,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--out", default="outputs/figures")
 ap.add_argument("--mnist-root", default=None)
 A = ap.parse_args()
-plt.rcParams["font.family"] = ["Hiragino Sans GB"] + cjk_fonts() + ["DejaVu Sans"]  # 讲义里的图用冬青黑体
+plt.rcParams["font.family"] = ["Hiragino Sans GB"] + cjk_fonts() + ["DejaVu Sans"]  # the deck figure uses Hiragino Sans GB
 S = make_pairs("test", 30, seed=3, root=A.mnist_root)
 
 
@@ -47,7 +47,7 @@ def fig_tasks():
 
 def fig_strip():
     LABEL = {"rot90": "顺时针旋转 90°", "rot180": "旋转 180°", "next": "换成下一个数字", "invert": "黑白反色"}
-    # 每组：参考图 | 箭头 | 目标图 | 组间空白
+    # per group: reference | arrow | target | gap
     W = [1, .38, 1, .42] * 4
     fig, axes = plt.subplots(1, len(W), figsize=(15, 2.5), gridspec_kw=dict(width_ratios=W))
     for g, task in enumerate(TASK_LIST):
@@ -62,7 +62,7 @@ def fig_strip():
         if not ax.images: [sp.set_visible(False) for sp in ax.spines.values()]
     plt.subplots_adjust(wspace=.05, left=.01, right=1.0, top=.98, bottom=.2)
     fig.canvas.draw()
-    for g, task in enumerate(TASK_LIST):  # 标签放在这组两张图的正下方（按图实际位置算，不按 axes 槽位）
+    for g, task in enumerate(TASK_LIST):  # label centred under the pair, from the actual image positions (not the axes slots)
         pa, pb = axes[4 * g].get_position(), axes[4 * g + 2].get_position()
         fig.text((pa.x0 + pb.x1) / 2, pa.y0 - .14, LABEL[task], ha="center", va="center", fontsize=19, color="#1D1D1F")
     save(fig, A.out, "practice_strip.png", dpi=200, facecolor="white")

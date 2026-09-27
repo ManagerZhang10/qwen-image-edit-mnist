@@ -1,31 +1,36 @@
 #!/usr/bin/env bash
-# 第 2 步 · 训练 LoRA：用 vendored 的 diffusers img2img 训练脚本在 MNIST 编辑任务上微调 Qwen-Image 2.1。
-# 讲义：第 3 页「训练一步怎么走」、第 7 页「LoRA 挂在哪」、第 8–9 页（训练 loss）、第 13–15 页（成功率、训练前后）。
+# Step 2 - LoRA training: fine-tune Qwen-Image 2.1 on the MNIST edit tasks with the vendored diffusers img2img trainer.
+# Deck: p.3 (One training step), p.7 (Where the LoRA goes), p.8-9 (Training loss, Loss by sigma),
+#       p.13-15 (Success rate, Before vs after training, Learnable vs not learnable).
 #
-# 默认超参就是实验 B：rank 32（alpha 32），注意力 + 图像 MLP 层，lr 1e-4 常数（无 warmup），3000 步，batch 1，
-# bf16，512×512，σ ~ U(0,1) 不加权（--weighting_scheme none），AdamW（wd 1e-4），seed 0。约 1.5 h / 1× H100 80GB。
+# Defaults are exactly experiment B: rank 32 (alpha 32), attention + image-MLP layers, lr 1e-4 constant (no warmup),
+# 3000 steps, batch 1, bf16, 512x512, sigma ~ U(0,1) with no loss weighting (--weighting_scheme none), AdamW (wd 1e-4),
+# seed 0. About 1.5 h on 1x H100 80GB.
 #
-# 用法：
-#   bash scripts/train_lora.sh MODEL_DIR DATA_DIR OUTPUT_DIR [选项]
-#     MODEL_DIR   本地 Qwen/Qwen-Image-2.1 快照（见 README：hf download ... --revision 790c926...）
-#     DATA_DIR    scripts/prepare_data.py 的输出（默认 4 × 500 = 2000 对）
-#     OUTPUT_DIR  写入 ckpt-<step>/pytorch_lora_weights.safetensors、checkpoint-<step>/（accelerate 状态）、
-#                 hook_logs/（train.jsonl、probe.jsonl、val.jsonl、meta.json、验证图）、FINAL.json
-# 选项：
-#   --train-shift S   训练时 σ shift：σ' = Sσ / (1 + (S−1)σ)，默认 1 = 不 shift（实验 E 用 5）
-#   --next-target T   固定测试集里 next 的目标（random | proto）；默认读 DATA_DIR/summary.json，与训练数据一致（实验 F）
-#   --steps N         总步数（默认 3000）         --ckpt-every N  每 N 步存 LoRA（默认 500）
-#   --val-every N     每 N 步生图验证（默认 200）  --probe-every N 每 N 步量固定测试集 loss（默认 50）
-#   --n-val N         验证 / probe 每任务几张（默认 16）
-#   --resume latest   从 OUTPUT_DIR 里最新的 checkpoint-<step>/ 续训
-#   --smoke           冒烟测试：6 步，每 3 步验证 / probe，每任务 2 张（几分钟，用来检查环境）
-# 旧的环境变量写法（STEPS=… CKPT_EVERY=… VAL_EVERY=… PROBE_EVERY=… N_VAL=… RESUME=…）仍然有效，命令行选项优先。
+# Usage:
+#   bash scripts/train_lora.sh MODEL_DIR DATA_DIR OUTPUT_DIR [options]
+#     MODEL_DIR   local Qwen/Qwen-Image-2.1 snapshot (see README: hf download ... --revision 790c926...)
+#     DATA_DIR    output of scripts/prepare_data.py (default 4 x 500 = 2000 pairs)
+#     OUTPUT_DIR  receives ckpt-<step>/pytorch_lora_weights.safetensors, checkpoint-<step>/ (accelerate state),
+#                 hook_logs/ (train.jsonl, probe.jsonl, val.jsonl, meta.json, val images), FINAL.json
+# Options:
+#   --train-shift S   train-time sigma shift: sigma' = S*sigma / (1 + (S-1)*sigma); default 1 = off (experiment E used 5)
+#   --next-target T   next targets of the fixed test set (random | proto); default: read DATA_DIR/summary.json so it
+#                     matches the training data (experiment F)
+#   --steps N         total steps (default 3000)          --ckpt-every N   save the LoRA every N steps (default 500)
+#   --val-every N     sample the test set every N steps (default 200)
+#   --probe-every N   held-out probe loss every N steps (default 50)
+#   --n-val N         test pairs per task for validation / probe (default 16)
+#   --resume latest   resume from the newest checkpoint-<step>/ in OUTPUT_DIR
+#   --smoke           smoke test: 6 steps, validation / probe every 3 steps, 2 pairs per task (a few minutes)
+# The old env overrides (STEPS=... CKPT_EVERY=... VAL_EVERY=... PROBE_EVERY=... N_VAL=... RESUME=...) still work;
+# command-line options take precedence.
 #
-# 例：
+# Examples:
 #   bash scripts/train_lora.sh models/Qwen-Image-2.1 data/mnist_edit_train outputs/lora_smoke --smoke
-#   bash scripts/train_lora.sh models/Qwen-Image-2.1 data/mnist_edit_train outputs/lora_b              # 实验 B
-#   bash scripts/train_lora.sh models/Qwen-Image-2.1 data/mnist_edit_train outputs/lora_e --train-shift 5  # 实验 E
-#   bash scripts/train_lora.sh models/Qwen-Image-2.1 data/mnist_edit_proto outputs/lora_f              # 实验 F
+#   bash scripts/train_lora.sh models/Qwen-Image-2.1 data/mnist_edit_train outputs/lora_b                  # experiment B
+#   bash scripts/train_lora.sh models/Qwen-Image-2.1 data/mnist_edit_train outputs/lora_e --train-shift 5  # experiment E
+#   bash scripts/train_lora.sh models/Qwen-Image-2.1 data/mnist_edit_proto outputs/lora_f                  # experiment F
 set -euo pipefail
 
 usage() { awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit "${1:-1}"; }
@@ -52,7 +57,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# next 的测试集目标必须和训练数据一致：没指定就读 prepare_data.py 写的 summary.json。
+# The test set's next targets must match the training data: unless given, read prepare_data.py's summary.json.
 if [[ -z "$NEXT_TARGET" ]]; then
   PY="$(command -v python || command -v python3)"
   NEXT_TARGET=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1])).get('next_target','random'))" \
@@ -72,9 +77,10 @@ export HOOK_NEXT_TARGET="$NEXT_TARGET" HOOK_DATA_SUMMARY="$DATA_DIR/summary.json
 RESUME_ARG=()
 [[ -n "$RESUME" ]] && RESUME_ARG=(--resume_from_checkpoint "$RESUME")
 
-# --instance_prompt 是上游 argparse 的必填项，但用不到：每一行都有自己的 caption。
-# 故意不开 --random_flip：翻转会改变旋转任务的语义。
-# batch 必须是 1：四条指令长度 / image-pad 位置不同，训练脚本拒绝把不同 prompt 布局拼成一个 batch。
+# --instance_prompt is required by the upstream argparse but unused: every row has its own caption.
+# --random_flip is deliberately NOT set: a flip would change the meaning of the rotation tasks.
+# Batch size must stay 1: the four instructions have different lengths / image-pad positions, and the
+# trainer refuses to batch mismatched prompt layouts.
 accelerate launch --num_processes 1 --num_machines 1 --mixed_precision bf16 --dynamo_backend no \
   "$REPO/train/train_dreambooth_lora_qwenimage21_img2img.py" \
   --pretrained_model_name_or_path "$MODEL_DIR" \

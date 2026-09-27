@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""分析 · 前向追踪（实验 A）：用真实权重跑一次编辑前向，逐步记录张量（MNIST 数字 5 + 顺时针转 90°，512²，40 步）。
+"""Analysis A: tensor trace of one real edit forward pass (digit 5 + "rotate 90 degrees clockwise", 512x512, 40 steps).
 
-讲义：第 4 页「张量怎么走」、第 5 页「参考图的两条预处理」、第 6 页「块因果注意力」（画图用 scripts/plot_trace.py）。
-需要一张 >= 40 GB 显存的 CUDA 卡（实测峰值 33 GiB）。
+Deck: p.4 (Tensor flow), p.5 (Two preprocessing paths for the reference image), p.6 (Block-causal attention);
+figures with scripts/plot_trace.py. Needs one CUDA GPU with >= 40 GB (peak 33 GiB).
 
 Experiment A: tensor trace of one real Qwen-Image 2.1 editing forward pass (MNIST rot90, 512x512).
 

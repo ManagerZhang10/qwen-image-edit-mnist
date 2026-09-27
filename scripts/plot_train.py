@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""第 5 步 · 画图（实验 B 训练过程）：从 train_lora.sh 的 hook_logs 画讲义里训练相关的图。CPU。
+"""Step 5 - figures for experiment B (training), from the hook_logs written by scripts/train_lora.sh. CPU.
 
-讲义页 → 输出文件：
-  第 8 页  训练 loss         qi21_b_loss.png           需要 train.jsonl、probe.jsonl
-  第 9 页  按 σ 看 loss      qi21_b_probe_by_task.png  需要 probe.jsonl
-  第 13 页 成功率            qi21_b_success.png        需要 val.jsonl、probe.jsonl
-  第 14 页 训练前后对照      qi21_b_samples.png        需要 meta.json 和 val/ 验证图（只有自己跑的输出才有）
-  第 15 页 学得会 vs 学不会  qi21_b_task_order.png     需要 val.jsonl、probe.jsonl
-另出 qi21_b_loss_by_sigma.png（按 σ 的 probe loss，讲义未用）。仓库附带的 results/train/ 能画除第 14 页外的全部。
+Deck page -> output file:
+  p.8  (Training loss)                qi21_b_loss.png           needs train.jsonl, probe.jsonl
+  p.9  (Loss by sigma)                qi21_b_probe_by_task.png  needs probe.jsonl
+  p.13 (Success rate)                 qi21_b_success.png        needs val.jsonl, probe.jsonl
+  p.14 (Before vs after training)     qi21_b_samples.png        needs meta.json and the val/ images (own runs only)
+  p.15 (Learnable vs not learnable)   qi21_b_task_order.png     needs val.jsonl, probe.jsonl
+Also writes qi21_b_loss_by_sigma.png (probe loss by sigma, not in the deck). The shipped results/train/ draws
+everything except p.14.
 
-用法：
-  python scripts/plot_train.py                                        # 读 results/train/
-  python scripts/plot_train.py --src outputs/lora_b/hook_logs         # 自己训练的输出（含第 14 页）
-  python scripts/plot_train.py --src results/train_e_shift5 --out outputs/figures/e   # E / F 的同款图
+Usage:
+  python scripts/plot_train.py                                        # from results/train/
+  python scripts/plot_train.py --src outputs/lora_b/hook_logs         # your own run (adds p.14)
+  python scripts/plot_train.py --src results/train_e_shift5 --out outputs/figures/e   # same figures for E / F
 """
 import argparse
 import json
@@ -28,7 +29,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from PIL import Image  # noqa: E402
 
 _ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument("--src", default="results/train", help="hook_logs 目录（train.jsonl、probe.jsonl、val.jsonl、meta.json、val/）")
+_ap.add_argument("--src", default="results/train", help="hook_logs dir (train.jsonl, probe.jsonl, val.jsonl, meta.json, val/)")
 _ap.add_argument("--out", default="outputs/figures")
 _ARGS = _ap.parse_args()
 SRC = _ARGS.src
@@ -137,7 +138,7 @@ def fig_success(val, probe):
     ax.set_yticks([0, 20, 40, 60, 80, 100])
     ax.set_xlabel("训练步数")
     ax.set_ylabel("编辑成功率（%，实线）")
-    # 右轴：固定测试集 loss
+    # right axis: held-out probe loss
     ax2 = ax.twinx()
     ps = np.array([r["step"] for r in probe]); pm = np.array([r["mean"] for r in probe])
     ax2.plot(ps, pm, color=TEXT, lw=2.2, ls="--", label="测试集 loss（右轴）", zorder=2)
@@ -162,7 +163,7 @@ def fig_grid(val, meta, steps):
     vdir = os.path.join(SRC, "val")
     cols = ["参考图", "目标"] + [f"第 {s} 步" for s in steps]
     pred = {r["step"]: r["pred"] for r in val}
-    # 按任务分组：组内两行紧挨，组间留空行，任务名每组只写一次
+    # grouped by task: two rows per group, a blank row between groups, task name once per group
     groups = []
     for i in grid:
         t = meta["samples"][i]["task"]
@@ -199,7 +200,7 @@ def fig_grid(val, meta, steps):
             if first_row:
                 ax.set_title(cols[c], fontsize=15, color=TEXT)
         first_row = False
-    # 每组一个任务名，竖向居中在两行之间，并画一条组色竖条
+    # one task name per group, vertically centred on its two rows, with a coloured bar
     for t, ids in groups:
         rs = [rows.index(i) for i in ids]
         top = fig.add_subplot(gs[rs[0], 0]).get_position(); bot = fig.add_subplot(gs[rs[-1], 0]).get_position()

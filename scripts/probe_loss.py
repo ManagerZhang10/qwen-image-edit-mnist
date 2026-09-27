@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""分析 · loss 与 σ（实验 D）：固定测试集上按 σ 量 loss，以及 σ = 1 处的下界 D = E_c[Var(x0 | c)]。
+"""Analysis D: held-out loss vs sigma, and the sigma = 1 floor D = E_c[Var(x0 | c)].
 
-讲义：第 10 页「σ 扫描看 x0 猜测」（vis 子命令）、第 11 页「loss = x0 误差 × 1/σ²」（measure 子命令）。
-需要一张 >= 40 GB 显存的 CUDA 卡；画图用 scripts/plot_probe.py（CPU）。
+Deck: p.10 (Sigma sweep of the x0 guess) <- vis, p.11 (loss = x0 error x 1/sigma^2) <- measure.
+Needs one CUDA GPU with >= 40 GB; figures with scripts/plot_probe.py (CPU).
 
 measure
   Part 1 (VAE only): D per task in the exact training latent space.
@@ -270,8 +270,8 @@ def main():
     v.add_argument("--out", default="outputs/probe/vis")
     v.add_argument("--ids", default="11,7", help="indices into make_pairs('test', 16): a rot90 and a next sample")
     v.add_argument("--px", type=int, default=160)
-    v.add_argument("--sigmas", default="0.1,0.5,0.95,0.99,1.0", help="逗号分隔的 σ 列表（讲义用默认值）")
-    v.add_argument("--extra", type=int, default=3, help="在最后一个 σ 上再换几组噪声（只存 x0′）")
+    v.add_argument("--sigmas", default="0.1,0.5,0.95,0.99,1.0", help="comma-separated sigmas (the deck uses the default)")
+    v.add_argument("--extra", type=int, default=3, help="extra noise draws at the last sigma (x0' only)")
     a = ap.parse_args()
     cmd_measure(a) if a.cmd == "measure" else cmd_vis(a)
 

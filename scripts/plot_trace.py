@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""第 5 步 · 画图（实验 A：一次编辑前向的张量追踪）：从 scripts/trace_forward.py 的输出画图。CPU。
+"""Step 5 - figures for experiment A (tensor trace of one edit forward pass), from scripts/trace_forward.py output. CPU.
 
-讲义页 → 图（位置参数选图，默认全部）：
-  第 4 页 张量怎么走          讲义用的是 draw.io 静态图（不提供生成脚本）；flow → qi21_a_flow.png 是同内容的 matplotlib 版
-  第 5 页 参考图的两条预处理  prep → qi21_a_prep.png
-  第 6 页 块因果注意力        mask_simple → qi21_a_mask_simple.png（示意图，不需要追踪数据）
-讲义未用：latent、strip、mask、x0（README 的 qi21_a_x0hat.png）、shapes、rope。
+Deck page -> figure (pick with positional args; default all):
+  p.4 (Tensor flow)      the deck uses a static draw.io image (no generator here); flow -> qi21_a_flow.png is a
+                         matplotlib version of the same content
+  p.5 (Two preprocessing paths for the reference image)   prep -> qi21_a_prep.png
+  p.6 (Block-causal attention)                             mask_simple -> qi21_a_mask_simple.png (schematic, no data)
+Not in the deck: latent, strip, mask, x0 (README's qi21_a_x0hat.png), shapes, rope.
 
-用法：
-  python scripts/plot_trace.py mask_simple                               # 不需要任何数据
-  python scripts/plot_trace.py --src outputs/trace prep flow x0          # 需要 trace.json + trace_arrays.npz
+Usage:
+  python scripts/plot_trace.py mask_simple                               # needs no data
+  python scripts/plot_trace.py --src outputs/trace prep flow x0          # needs trace.json + trace_arrays.npz
 """
 import argparse
 import json
@@ -26,7 +27,7 @@ from qie_mnist.plotting import cjk_fonts, save as _save  # noqa: E402
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("--src", default="outputs/trace", help="trace_forward.py output dir")
 ap.add_argument("--out", default="outputs/figures")
-ap.add_argument("figs", nargs="*", help="latent strip mask x0 shapes rope flow prep mask_simple（默认全部）")
+ap.add_argument("figs", nargs="*", help="any of latent strip mask x0 shapes rope flow prep mask_simple (default: all)")
 ARGS = ap.parse_args()
 OUT = Path(ARGS.src)
 MEDIA = Path(ARGS.out)
@@ -40,7 +41,7 @@ plt.rcParams.update({"font.family": cjk_fonts() + ["DejaVu Sans"],
                      "ytick.color": MUTED, "axes.unicode_minus": False, "font.size": 16,
                      "axes.spines.top": False, "axes.spines.right": False})
 
-T = A = S = SEGS = None  # 追踪数据：_load() 按需读取（mask_simple 不需要）
+T = A = S = SEGS = None  # trace data, loaded on demand by _load() (mask_simple needs none)
 
 
 def _load():
@@ -122,7 +123,7 @@ def fig_strip():
     texts = [sg for sg in SEGS if sg["kind"] == "text"]
     for n, sg in enumerate(texts):
         mid = (sg["start"] + sg["end"]) / 2
-        # per-token decode splits the UTF-8 bytes of 「度」 into two pieces; show the joined text
+        # per-token decode splits the UTF-8 bytes of one character (U+5EA6) into two pieces; show the joined text
         label = sg.get("text", "").replace(" ��", " 度").replace("\n", "⏎")
         if len(label) > 34:  # break after the instruction instead of truncating
             k = label.find("<|im_end|>")
@@ -159,7 +160,7 @@ def fig_mask():
     md = A["mask_ds"].astype(np.float32); ds = S["7_mask"]["downsample"]
     fig = plt.figure(figsize=(19.2, 9.6))
     gs = fig.add_gridspec(1, 2, width_ratios=[1, 1], wspace=0.28, left=0.08, right=0.97, top=0.80, bottom=0.14)
-    # 左：示意图，不按真实长度，每段只画几个 token
+    # left: schematic, not to scale, a few tokens per segment
     segs = [("文本", 3, -1), ("参考图", 4, 0), ("指令", 4, -1), ("目标图", 4, 1)]
     ids = sum([[k] * n for _, n, k in segs], []); n = len(ids); ids = np.array(ids)
     q = np.arange(n)
@@ -563,7 +564,7 @@ def _draw_prep(TH):
         if border:
             ax.add_patch(Rectangle((x, y), w, h, fill=False, ec=border, lw=1.2, zorder=3))
 
-    # ---------------- 左：参考图 + 两层网格
+    # ---------------- left: reference image + two grids
     X, Y, S = 24, 190, 300
     ax.text(X, Y - 64, "参考图 512 × 512", fontsize=17, color=TEXT, fontweight=600, va="bottom")
     ax.text(X, Y - 40, "细格 = 16 px（VAE 一个 token，ViT 一块）", fontsize=12, color=MUTED, va="bottom")
@@ -580,7 +581,7 @@ def _draw_prep(TH):
     ax.add_patch(Rectangle((bx, by), S / 16, S / 16, fill=False, ec="#FFB020", lw=2.6, zorder=4))
     ax.text(X + S / 2, Y + S + 24, "黄框：1 个 slot = 2×2 个 16px 块", ha="center", fontsize=12, color="#B77800")
 
-    # ---------------- 上路：VAE
+    # ---------------- top path: VAE
     yA = 110
     ax.text(380, yA - 58, "VAE 这一路：给 DiT 看像素细节", fontsize=15, color=TEXT, fontweight=600)
     arrow(X + S + 6, Y + 40, 380, yA, color="#555")
@@ -596,7 +597,7 @@ def _draw_prep(TH):
     arrow(1132, yA, 1170, yA)
     box(1172, yA - 30, 170, 60, "参考图 1024 个", C_REF, sub="× 4096")
 
-    # ---------------- 下路：Qwen3-VL
+    # ---------------- bottom path: Qwen3-VL
     yB = 400
     ax.text(380, yB - 70, "Qwen3-VL 这一路：让指令「看懂」参考图", fontsize=15, color=TEXT, fontweight=600)
     arrow(X + S + 6, Y + S - 40, 380, yB, color="#555")
@@ -606,7 +607,7 @@ def _draw_prep(TH):
     box(587, yB - 36, 150, 72, "ViT 27 层", C_VLM, sub="1024 × 1152")
     arrow(737, yB, 772, yB)
     box(774, yB - 36, 150, 72, "2×2 合并", C_VLM, sub="→ 256 × 4096")
-    # 2×2 -> 1 小示意
+    # small 2x2 -> 1 sketch
     gx, gy, c = 800, yB + 50, 13
     for i in range(2):
         for j in range(2):
@@ -614,7 +615,7 @@ def _draw_prep(TH):
     ax.annotate("", xy=(gx + 58, gy + c), xytext=(gx + 30, gy + c), arrowprops=dict(arrowstyle="-|>", color=MUTED, lw=1.2))
     ax.add_patch(Rectangle((gx + 62, gy), 2 * c - 1, 2 * c - 1, fc="#5B9BE8", ec="none"))
     arrow(924, yB, 960, yB)
-    # VLM 序列条
+    # VLM sequence bar
     sx, sw = 962, 380
     ax.text(sx + sw / 2, yB - 46, "Qwen3-VL 的输入序列（去掉 system 后 281 个）", ha="center", fontsize=12, color=MUTED)
     segs = [("文本 8", C_TXT, .7), ("256 个 image_pad（slot）", C_REF, 3.2), ("指令等 17", C_TXT, 1.1)]
@@ -628,7 +629,7 @@ def _draw_prep(TH):
     box(sx + sw + 42, yB - 36, 196, 72, "Qwen3-VL 语言模型", C_VLM, sub="36 层 · 图文一条序列", fs=14)
     ax.text(sx + sw + 140, yB + 56, "image_pad 处的输出丢掉，\n只留文本 25 个", ha="center", fontsize=11.5, color=MUTED, va="top")
 
-    # ---------------- 底部：DiT 联合序列
+    # ---------------- bottom: DiT joint sequence
     yC = 640
     ax.text(380, yC - 60, "拼进 DiT：每个 slot 展开成 4 格，按行顺序填 VAE token（只对数量，不对 2×2 位置）", fontsize=14,
             color=TEXT, fontweight=600)
@@ -642,7 +643,7 @@ def _draw_prep(TH):
         ax.text(cx + w / 2, yC, lab, ha="center", va="center", fontsize=12.5, color=TEXT)
         pos[lab[:2]] = (cx, w); cx += w + 5
     ax.text(jx + jw, yC - 60, "联合序列 2073 × 4096", ha="right", fontsize=12.5, color=MUTED)
-    # 来源用颜色和小字标，不画长箭头（会穿过中间一路）
+    # sources marked by colour and small labels, no long arrows (they would cross the middle path)
     rx, rw = pos["参考"]
     ax.text(rx + rw / 2, yC + 34, "上路：VAE 的 1024 个 token", ha="center", va="top", fontsize=12, color=BLUE_T)
     ax.text(pos["文本"][0], yC + 62, "灰色两段：下路 Qwen3-VL 输出的文本 8 + 17 个", ha="left", va="top", fontsize=12, color=MUTED)
@@ -654,7 +655,7 @@ def _draw_prep(TH):
 
 
 def _prep_thumbs(th):
-    """参考图、潜变量立方体、token 条三张缩略图（与讲义所用图完全一致的生成方式），写到临时目录 th。"""
+    """The three thumbnails (reference, latent cube, token strip), generated exactly as for the deck figure, into dir th."""
     from PIL import Image
 
     def pca(zz):
@@ -684,16 +685,17 @@ def _prep_thumbs(th):
 
 
 def fig_prep():
-    """第 5 页：参考图的两条预处理路线。VAE（16px 一个 latent token）和 Qwen3-VL（16px 切块、2×2 合并成一个 image_pad
-    slot），以及 slot 在 DiT 联合序列里展开成 4 个 latent token。图中数字来自实验 A 那次真实前向
-    （pixel_values [1024,1536]、ViT 输出 [1024,1152]、image_pad 256 个、prompt_embeds [1,281,4096]、联合序列 2073）。"""
+    """Deck p.5: the two preprocessing paths of the reference image. VAE (one latent token per 16 px) and Qwen3-VL
+    (16 px patches, 2x2 merged into one image_pad slot), and how a slot expands to 4 latent tokens in the DiT joint
+    sequence. The numbers come from experiment A's real forward pass (pixel_values [1024,1536], ViT output
+    [1024,1152], 256 image_pad, prompt_embeds [1,281,4096], joint sequence 2073)."""
     import os
     import tempfile
     from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: F811
     from PIL import Image
     from qie_mnist.plotting import set_style
     with tempfile.TemporaryDirectory() as td, plt.rc_context():
-        matplotlib.rcdefaults()   # 缩略图按 matplotlib 默认样式生成
+        matplotlib.rcdefaults()   # thumbnails use matplotlib default style
         _prep_thumbs(Path(td))
         set_style()
         _draw_prep(Path(td))

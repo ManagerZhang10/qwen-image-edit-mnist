@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""第 5 步 · 画图（实验 D：loss 与 σ）：从 scripts/probe_loss.py 的输出画图。CPU。
+"""Step 5 - figures for experiment D (loss vs sigma), from scripts/probe_loss.py output. CPU.
 
-讲义页 → 输出文件：
-  第 10 页 σ 扫描看 x0 猜测        qi21_b_sigma_vis.png     需要 --vis（probe_loss.py vis 的缩略图 + vis_numbers.json）
-  第 11 页 loss = x0 误差 × 1/σ²   qi21_b_sigma_decomp.png  只需 results.json（仓库已附带 results/probe/）
-另出 qi21_b_loss_vs_sigma_by_task.png（README 用图：确定性任务 vs next，虚线为下界 D）。
+Deck page -> output file:
+  p.10 (Sigma sweep of the x0 guess)          qi21_b_sigma_vis.png     needs --vis (probe_loss.py vis thumbnails + vis_numbers.json)
+  p.11 (loss = x0 error x 1/sigma^2)          qi21_b_sigma_decomp.png  needs only results.json (shipped in results/probe/)
+Also writes qi21_b_loss_vs_sigma_by_task.png (README figure: deterministic tasks vs next, dashed line = floor D).
 
-用法：
-  python scripts/plot_probe.py                                   # 读 results/probe/，画第 11 页 + README 图
-  python scripts/plot_probe.py --src outputs/probe --vis outputs/probe/vis   # 自己跑的输出，另画第 10 页
+Usage:
+  python scripts/plot_probe.py                                   # results/probe/: p.11 + the README figure
+  python scripts/plot_probe.py --src outputs/probe --vis outputs/probe/vis   # your own outputs, adds p.10
 """
 import argparse
 import json
@@ -19,15 +19,15 @@ import numpy as np
 from qie_mnist.plotting import ACCENT, GRAY, LIGHT, MUTED, TEXT, plt, save, set_style  # noqa: F401
 
 _ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument("--src", default="results/probe", help="probe_loss.py measure 的输出目录（results.json）")
-_ap.add_argument("--vis", default=None, help="probe_loss.py vis 的输出目录（PNG + vis_numbers.json），给了才画第 10 页")
+_ap.add_argument("--src", default="results/probe", help="output dir of probe_loss.py measure (results.json)")
+_ap.add_argument("--vis", default=None, help="output dir of probe_loss.py vis (PNGs + vis_numbers.json); enables deck p.10")
 _ap.add_argument("--out", default="outputs/figures")
 _A = _ap.parse_args()
 RESULTS = os.path.join(_A.src, "results.json")
 VIS = _A.vis
 MEDIA = _A.out
-VIS_SIGMAS = ["0.1", "0.5", "0.95", "0.99", "1.0"]   # 与 probe_loss.py vis 的默认值一致
-VIS_EXTRA = 3                                        # σ = 1 处额外的噪声组数
+VIS_SIGMAS = ["0.1", "0.5", "0.95", "0.99", "1.0"]   # same as the probe_loss.py vis default
+VIS_EXTRA = 3                                        # extra noise draws at sigma = 1
 TASKS = ["rot90", "rot180", "invert", "next"]
 TASK_ZH = {"rot90": "顺时针转 90°", "rot180": "旋转 180°", "next": "换成下一个数字", "invert": "黑白反色"}
 TASK_C = {"rot90": ACCENT, "rot180": "#eb6834", "next": "#1baf7a", "invert": "#eda100"}
@@ -73,7 +73,7 @@ def fig_loss_vs_sigma():
 
 
 def fig_decomp():
-    """v loss = x0 误差 × 1/σ²（x0′ − x0 = σ·(v − v′) 恒等成立）：上 = v loss，中 = 1/σ²，下 = x0 误差。"""
+    """v loss = x0 error x 1/sigma^2 (exact, since x0' - x0 = sigma * (v - v')): top v loss, middle 1/sigma^2, bottom x0 error."""
     set_style()
     R0 = json.load(open(RESULTS))
     R = R0.get("probe_lora") or R0["probe_base"]
@@ -92,7 +92,7 @@ def fig_decomp():
         ax.set_yscale("log"); ax.set_xlim(0.03, 1.04); ax.set_xticks([0.1, 0.3, 0.5, 0.7, 0.9])
     axA.set_xlabel("σ（噪声占比）")
     axC.axvspan(0.03, 0.5, color=L1, zorder=0); axC.axvspan(0.5, 1.04, color=L2, zorder=0)
-    axB.set_facecolor(L1); axA.set_facecolor(L2)   # 中间整张对应上图左半边，下面整张对应右半边
+    axB.set_facecolor(L1); axA.set_facecolor(L2)   # the middle panel explains the left half of the top panel, the bottom panel the right half
     for t in TASKS:
         v = np.array([R[t][s]["mean"] for s in S])
         det = t != "next"
@@ -120,7 +120,8 @@ def fig_decomp():
 
 
 def xt_pixel(tag, s):
-    """(1−σ)·x0 + σ·ε 的像素空间示意（模型真正的 x_t 在潜空间，硬解码出来是彩色色块）。只在内存里生成，不写文件。"""
+    """Pixel-space illustration of (1 - sigma) * x0 + sigma * eps (the model's real x_t lives in latent space and decodes to
+    colour blotches). Built in memory; nothing is written."""
     from PIL import Image
     x0 = np.asarray(Image.open(os.path.join(VIS, f"{tag}_x0.png")).convert("L"), dtype=np.float32) / 127.5 - 1
     eps = np.random.default_rng(0).standard_normal(x0.shape).astype(np.float32)
@@ -129,7 +130,8 @@ def xt_pixel(tag, s):
 
 
 def fig_sigma_vis():
-    """每组：参考图 / 正确答案，各 σ 下的 x_t（像素示意）和模型的一步猜测 x0′，外加 σ = 1 再换 3 组噪声。"""
+    """Per group: reference / ground truth, x_t (pixel illustration) and the one-step guess x0' at each sigma, plus 3 more
+    noise draws at sigma = 1."""
     from PIL import Image
     TASK_C2 = {"rot90": ACCENT, "next": "#1baf7a"}
     TITLE = {"rot90": "顺时针转 90°（确定性）", "next": "换成下一个数字（不确定性）"}
@@ -159,8 +161,8 @@ def fig_sigma_vis():
                                          color=TASK_C2[task]))
         fig.text(0.024, top - 0.018, TITLE[task], fontsize=19, color=TEXT, va="center")
         fig.text(0.262, top - 0.018, f"指令：{r['prompt']}", fontsize=15, color=MUTED, va="center")
-        y1 = top - 0.045 - ih          # x_t 这一行
-        y2 = y1 - 0.008 - ih           # x0′ 这一行
+        y1 = top - 0.045 - ih          # x_t row
+        y2 = y1 - 0.008 - ih           # x0' row
         img(col0, y1, os.path.join(VIS, f"{tag}_ref.png"))
         img(col0, y2, os.path.join(VIS, f"{tag}_x0.png"), edge=TASK_C2[task])
         fig.text(col0 - 0.008, y1 + ih / 2, "参考图", ha="right", va="center", fontsize=14, color=TEXT)
@@ -177,7 +179,7 @@ def fig_sigma_vis():
             fig.text(cx, y2 - 0.059, f"v loss {n['v_loss']:.3f}", ha="center", va="top", fontsize=13, color=TEXT)
             fig.text(cx, y2 - 0.083, f"16 张平均 v loss {avg[task][s]['mean']:.3f}", ha="center", va="top",
                      fontsize=12, color=MUTED)
-        # σ = 1：再换 3 组噪声，看猜测变不变
+        # sigma = 1: 3 more noise draws, does the guess change?
         ex, sc = 0.895, 0.62
         fig.text(ex + iw * sc / 2, y1 + ih + 0.006, "σ = 1 再换 3 组噪声", ha="center", va="bottom", fontsize=13, color=MUTED)
         step = (2 * ih + 0.008 - 3 * ih * sc) / 2

@@ -1,4 +1,4 @@
-"""评测：编辑成功率和像素 IoU（讲义第 12 页「成功率怎么算」）。训练验证、推理扫描、画图都用这一份。
+"""Edit success rate and pixel IoU. Deck: p.12 (How success is scored). Used by training validation, sweeps and plots.
 
 Scoring for the MNIST editing tasks.
 

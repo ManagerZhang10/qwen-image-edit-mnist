@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""第 4 步 · 评测汇总：把 results/（或你自己跑出的输出）里的小 JSON 打印成 README「主要结论」里的表。CPU，秒级。
+"""Step 4 - evaluation summary: print the small JSON files in results/ (or your own outputs) as the tables of the
+README's results section. CPU, seconds. The printed tables are in Chinese, like the README.
 
-讲义：第 13 页「成功率」、第 15 页「学得会 vs 学不会」（B）、第 11 页（D 的 loss vs σ）、
-第 16–19 页（C 的 CFG / shift / LoRA 强度 / 采样步数），以及 README 里 E、F 两个训练变体的对照。
+Deck: p.13 (Success rate) and p.15 (Learnable vs not learnable) for B, p.11 (loss = x0 error x 1/sigma^2) for D,
+p.16-19 (CFG, Shift, LoRA scale, Sampling steps) for C, plus the README's comparison of the training variants E and F.
 
-每个任务只有 16 张测试图：成功率的分辨率是 1/16 = 6.25 个百分点，一张图就是约 6 个点。
+Only 16 test pairs per task: the success rate moves in steps of 1/16 = 6.25 points, so one image is about 6 points.
 
-用法：
-  python scripts/summarize_results.py                       # 全部，读 results/
-  python scripts/summarize_results.py b e f                 # 只看训练相关
-  python scripts/summarize_results.py c --sweep outputs/sweep  # 用自己跑的扫描结果
+Usage:
+  python scripts/summarize_results.py                          # everything, from results/
+  python scripts/summarize_results.py b e f                    # training only
+  python scripts/summarize_results.py c --sweep outputs/sweep  # your own sweep outputs
   python scripts/summarize_results.py b --train outputs/lora_b/hook_logs
 """
 import argparse
@@ -23,7 +24,7 @@ ZH = {"rot90": "90°", "rot180": "180°", "next": "next", "invert": "反色"}
 def jl(path):
     with open(path) as f:
         recs = [json.loads(x) for x in f if x.strip()]
-    by = {r["step"]: r for r in recs}  # 断点续训会重放若干步：同一步保留最后一条
+    by = {r["step"]: r for r in recs}  # a resumed run replays some steps: keep the last record per step
     return [by[k] for k in sorted(by)]
 
 
@@ -148,12 +149,12 @@ def cmd_d(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("parts", nargs="*", default=["b", "e", "f", "c", "d"], help="b e f c d 中的若干个（默认全部）")
-    ap.add_argument("--train", default="results/train", help="B 的 hook_logs（val.jsonl、probe.jsonl）")
-    ap.add_argument("--e", default="results/train_e_shift5", help="E（训练时 σ shift 5）的 hook_logs")
-    ap.add_argument("--f", default="results/train_f_proto", help="F（next 用固定原型）的 hook_logs")
-    ap.add_argument("--sweep", default="results/sweep", help="含 phase2/ phase3/ 的目录")
-    ap.add_argument("--probe", default="results/probe", help="probe_loss.py measure 的输出目录")
+    ap.add_argument("parts", nargs="*", default=["b", "e", "f", "c", "d"], help="any of b e f c d (default: all)")
+    ap.add_argument("--train", default="results/train", help="B hook_logs (val.jsonl, probe.jsonl)")
+    ap.add_argument("--e", default="results/train_e_shift5", help="E hook_logs (train-time sigma shift 5)")
+    ap.add_argument("--f", default="results/train_f_proto", help="F hook_logs (fixed next prototypes)")
+    ap.add_argument("--sweep", default="results/sweep", help="dir holding phase2/ and phase3/")
+    ap.add_argument("--probe", default="results/probe", help="output dir of probe_loss.py measure")
     a = ap.parse_args()
     for p in a.parts:
         if p == "b":

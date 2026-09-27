@@ -1,4 +1,4 @@
-"""固定测试集上、固定 σ 和噪声的 flow-matching loss（probe loss）：讲义第 9 页「按 σ 看 loss」、第 11 页。
+"""Probe loss on the fixed test set at fixed sigmas and noise. Deck: p.9 (Loss by sigma), p.11 (loss = x0 error x 1/sigma^2).
 
 Held-out flow-matching loss at fixed sigmas ("probe loss"), shared by the training hooks and probe_loss.py.
 

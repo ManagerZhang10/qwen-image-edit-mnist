@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""第 1 步 · 准备训练数据：把 make_pairs('train', N) 写成 diffusers img2img LoRA 训练脚本能读的本地数据集。
+"""Step 1 - training data: write make_pairs('train', N) as the local dataset the diffusers img2img LoRA trainer reads.
 
-讲义：第 2 页「四种编辑任务」（数据长什么样），第 3 页「训练一步怎么走」第 1 步（取一对样本）。
-只用 CPU；MNIST 首次运行时自动下载到 --mnist-root（默认 $MNIST_ROOT 或 ./data）。
+Deck: p.2 (Four edit tasks) for what the data looks like, p.3 (One training step) step 1 (take a pair).
+CPU only; MNIST is downloaded on first use to --mnist-root (default $MNIST_ROOT or ./data).
 
-训练脚本调用 datasets.load_dataset(--dataset_name)，需要三列：
-  --cond_image_column cond_image   参考图（被编辑的那张）
-  --image_column      image        目标图
-  --caption_column    caption      固定的中文编辑指令
-一个装着 data/train-00000-of-00001.parquet（带 Image feature 元数据）的目录就够了。
-另写 summary.json（样本数、任务、next 目标模式），scripts/train_lora.sh 会读其中的 next_target。
+The trainer calls datasets.load_dataset(--dataset_name) and needs three columns:
+  --cond_image_column cond_image   reference image (the one being edited)
+  --image_column      image        target image
+  --caption_column    caption      the fixed Chinese edit instruction
+A folder holding data/train-00000-of-00001.parquet (with Image feature metadata) is enough.
+summary.json records the counts, tasks and next-target mode; scripts/train_lora.sh reads its next_target.
 
-用法：
-  python scripts/prepare_data.py --out data/mnist_edit_train                       # 实验 B：4 × 500 = 2000 对
-  python scripts/prepare_data.py --out data/mnist_edit_proto --next-target proto   # 实验 F：next 用固定原型
-  python scripts/prepare_data.py --out data/mnist_edit_next --tasks next           # 只训 next（实验 G 式）
-  python scripts/prepare_data.py --out /tmp/qie_smoke --n-per-task 4               # 冒烟测试
+Usage:
+  python scripts/prepare_data.py --out data/mnist_edit_train                       # experiment B: 4 x 500 = 2000 pairs
+  python scripts/prepare_data.py --out data/mnist_edit_proto --next-target proto   # experiment F: fixed next prototypes
+  python scripts/prepare_data.py --out data/mnist_edit_next --tasks next           # train on next only (task subset)
+  python scripts/prepare_data.py --out /tmp/qie_smoke --n-per-task 4               # smoke test
 """
 import argparse
 import io
@@ -33,20 +33,21 @@ def png(im):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", required=True, help="输出数据集目录")
-    ap.add_argument("--n-per-task", type=int, default=500, help="每个任务的样本对数（实验 B 用 500 → 共 2000 对）")
+    ap.add_argument("--out", required=True, help="output dataset directory")
+    ap.add_argument("--n-per-task", type=int, default=500, help="pairs per task (experiment B used 500 -> 2000 pairs)")
     ap.add_argument("--tasks", default="all",
-                    help="逗号分隔的任务子集，如 next 或 rot90,invert；默认 all = rot90,rot180,next,invert")
+                    help="comma-separated task subset, e.g. next or rot90,invert; default all = rot90,rot180,next,invert")
     ap.add_argument("--next-target", default="random", choices=D.NEXT_TARGETS,
-                    help="next 的目标：random = 另一个人写的 n+1（实验 B）；proto = 每个数字一张固定原型（实验 F）")
+                    help="next target: random = another writer's n+1 (experiment B); proto = one fixed prototype per digit (experiment F)")
     ap.add_argument("--split", default="train", choices=["train", "test"])
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--mnist-root", default=None, help="MNIST 下载 / 缓存目录（默认 $MNIST_ROOT 或 ./data）")
+    ap.add_argument("--mnist-root", default=None, help="MNIST download/cache dir (default: $MNIST_ROOT or ./data)")
     a = ap.parse_args()
     tasks = D.parse_tasks(a.tasks)
 
-    # 直接用 pyarrow 写（外加标记两列图像的 `huggingface` schema 元数据）：Dataset.from_dict 会用 dill 给内存表算指纹，
-    # 在部分 datasets / pyarrow / python 组合下报错。load_dataset() 读回来时两列就是 Image feature。
+    # Written with pyarrow directly (plus the `huggingface` schema metadata that marks the two image columns),
+    # because Dataset.from_dict fingerprints the in-memory table with dill, which fails on some
+    # datasets/pyarrow/python combinations. load_dataset() reads the file back with Image features.
     import pyarrow as pa
     import pyarrow.parquet as pq
     pairs = D.make_pairs(a.split, a.n_per_task, seed=a.seed, root=a.mnist_root, tasks=tasks,

@@ -21,6 +21,13 @@ Shared rules for any coding agent working in this repository.
 - `deck/`: Chinese lecture deck. Edit `deck/src/*.html`, then run `deck/build.sh`; commit both the sources and the built
   `deck/practice.html`. `deck/media/` holds only the figures the deck references.
 
+## Language
+
+- Code comments, docstrings, script headers and argparse help in `.py` / `.sh` are English. Refer to the deck as
+  "deck p.N (English page title)", e.g. "deck p.16 (CFG)". Figure labels and the printed result tables stay Chinese
+  to match the deck and README.
+- `README.md`, `deck/README.md` and the deck itself are Chinese.
+
 ## How to run
 
 - Install: `pip install -r requirements.txt && pip install -e .`
