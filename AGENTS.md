@@ -9,6 +9,8 @@ Shared rules for any coding agent working in this repository.
 - `train/`: vendored diffusers trainer (@ e0abab8) + `train_hooks.py`. Keep the Apache-2.0 header and `NOTICE` in sync
   with any change; regenerate `train/hooks.patch` against the upstream file after editing the trainer.
 - `results/`: small JSON summaries of the reported runs. `figures/`: images used by the README.
+- `deck/`: Chinese lecture deck. Edit `deck/src/*.html`, then run `deck/build.sh`; commit both the sources and the built
+  `deck/practice.html`. `deck/media/` holds only the figures the deck references.
 
 ## How to run
 

@@ -13,6 +13,10 @@ released. The documentation below is in Chinese.
 
 ---
 
+## 讲解 deck
+
+中文讲解幻灯片在 [`deck/practice.html`](deck/practice.html)（下载后用 Chrome 打开），说明见 [`deck/README.md`](deck/README.md)。
+
 ## 这个项目展示什么
 
 用一个小到能完全看清楚的任务，把一个真实的指令编辑模型（Qwen-Image 2.1，约 16B 参数）从头到尾走一遍：

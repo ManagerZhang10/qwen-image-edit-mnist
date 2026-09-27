@@ -1,0 +1,139 @@
+</div>
+<div id="nav-hot"></div>
+<div id="nav-btn"><div class="b" id="nb-prev">‹</div><span class="pg" id="nb-pg">1 / 1</span><div class="b" id="nb-next">›</div><div class="b" id="nb-list">☰</div></div>
+<div id="nav-panel"></div>
+<div id="hud"></div>
+<script>
+(function(){
+  const stage=document.getElementById('stage');
+  const slides=[...document.querySelectorAll('.slide')];
+  const hud=document.getElementById('hud');
+  let cur=-1, showCounter=false;
+  function fit(){ const s=Math.min(innerWidth/1920, innerHeight/1080); stage.style.transform=`translate(-50%,-50%) scale(${s})`; if(cur>=0) fitFigs(slides[cur]); }
+  // 让白色图卡贴合图片 / 视频比例：宽图不留大片空白，剩余空间上下均分
+  function fitFigs(sl){
+    sl.querySelectorAll(':scope > .fig.card, :scope > .fig.plain').forEach(f=>{
+      const img=f.querySelector('img,video'); if(!img) return;
+      const nw=img.naturalWidth||img.videoWidth, nh=img.naturalHeight||img.videoHeight; if(!nw||!nh) return;
+      f.style.flex=''; f.style.width=''; f.style.height=''; f.style.margin='';
+      const W=f.clientWidth, H=f.clientHeight; if(!W||!H) return;
+      const pad=f.classList.contains('card')?60:0, ar=nw/nh;
+      let w=W, h=(W-pad)/ar+pad; if(h>H){ h=H; w=(H-pad)*ar+pad; }
+      f.style.flex='0 0 auto'; f.style.width=Math.round(w)+'px'; f.style.height=Math.round(h)+'px'; f.style.margin='auto';
+    });
+    sl.querySelectorAll(':scope > .fig2').forEach(row=>{
+      const cards=[...row.querySelectorAll(':scope > .fig.card')]; if(!cards.length) return;
+      cards.forEach(f=>{ f.style.flex=''; f.style.width=''; f.style.height=''; f.style.alignSelf=''; });
+      row.style.justifyContent='';
+      const H=row.clientHeight; if(!H) return;
+      const sizes=cards.map(f=>{ const img=f.querySelector('img'); if(!img||!img.naturalWidth) return null;
+        const W=f.clientWidth, pad=60, ar=img.naturalWidth/img.naturalHeight; let w=W, h=(W-pad)/ar+pad; if(h>H){ h=H; w=(H-pad)*ar+pad; } return [w,h]; });
+      if(sizes.some(x=>!x)) return;
+      cards.forEach((f,i)=>{ f.style.flex='0 0 auto'; f.style.width=Math.round(sizes[i][0])+'px'; f.style.height=Math.round(sizes[i][1])+'px'; f.style.alignSelf='center'; });
+      row.style.justifyContent='center';
+    });
+  }
+  document.querySelectorAll('.slide > .fig img, .slide > .fig2 > .fig img').forEach(img=>img.addEventListener('load',()=>{ const sl=img.closest('.slide'); if(sl.classList.contains('active')) fitFigs(sl); }));
+  document.querySelectorAll('.slide > .fig video').forEach(v=>v.addEventListener('loadedmetadata',()=>{ const sl=v.closest('.slide'); if(sl.classList.contains('active')) fitFigs(sl); }));
+  function show(n){
+    n=Math.max(0,Math.min(slides.length-1,n)); if(n===cur) return;
+    slides.forEach((s,k)=>{ const on=k===n; s.classList.toggle('active',on); s.querySelectorAll('video').forEach(v=>{ if(on){ try{v.currentTime=0;}catch(e){} v.play().catch(()=>{}); } else { v.pause(); } }); });
+    const nx=slides[n+1]; if(nx) nx.querySelectorAll('video').forEach(v=>{ if(v.preload!=='auto'){ v.preload='auto'; v.load(); } });
+    cur=n; history.replaceState(null,'','#'+(n+1)); updateHud(); layoutArrows(slides[n]); fitFigs(slides[n]); startAnim(slides[n]);
+  }
+  // ---- 箭头连线：<path data-from="块id" data-to="块id"> 的坐标按两个块的实际位置现算，别手写 ----
+  // data-route：auto（默认：能水平就水平、能竖直就竖直，否则斜线）| h | v | hv | vh | hvh | vhv | straight
+  // hvh / vhv 的中段位置用 data-mid（x 或 y）指定，用来绕开挡路的块；data-gap1 / data-gap2 是尾 / 头离块的距离
+  function boxIn(el,ref){
+    const bb=el.getBBox(), m=ref.getCTM().inverse().multiply(el.getCTM());
+    const ps=[[bb.x,bb.y],[bb.x+bb.width,bb.y],[bb.x,bb.y+bb.height],[bb.x+bb.width,bb.y+bb.height]].map(([x,y])=>new DOMPoint(x,y).matrixTransform(m));
+    const xs=ps.map(q=>q.x), ys=ps.map(q=>q.y), l=Math.min(...xs), t=Math.min(...ys), r=Math.max(...xs), b=Math.max(...ys);
+    return {l,t,r,b,cx:(l+r)/2,cy:(t+b)/2};
+  }
+  function layoutArrows(sl){
+    sl.querySelectorAll('svg [data-from][data-to]').forEach(p=>{
+      const svg=p.ownerSVGElement, ea=svg.getElementById(p.dataset.from), eb=svg.getElementById(p.dataset.to);
+      if(!ea||!eb){ console.warn('箭头找不到块：', p.dataset.from, '→', p.dataset.to); return; }
+      const A=boxIn(ea,p), B=boxIn(eb,p), g1=+(p.dataset.gap1||6), g2=+(p.dataset.gap2||8), f=v=>Math.round(v*10)/10;
+      const oy=[Math.max(A.t,B.t),Math.min(A.b,B.b)], ox=[Math.max(A.l,B.l),Math.min(A.r,B.r)];
+      let r=p.dataset.route||'auto';
+      if(r==='auto') r=(oy[1]-oy[0]>=12&&(B.l>=A.r||A.l>=B.r))?'h':(ox[1]-ox[0]>=12&&(B.t>=A.b||A.t>=B.b))?'v':'straight';
+      const R=B.cx>A.cx, D=B.cy>A.cy, mid=p.dataset.mid!==undefined?+p.dataset.mid:null;
+      // 直线优先对准终点块中线，其次起点块中线，都不行才取两块重叠段的中点（这时两个块本身没对齐，该挪块）
+      const pick=(c1,c2,o,lo1,hi1,lo2,hi2)=>[c1,c2,(o[0]+o[1])/2].find(v=>v>=lo1+10&&v<=hi1-10&&v>=lo2+10&&v<=hi2-10)??(o[0]+o[1])/2;
+      let d;
+      if(r==='h'){ const y=pick(B.cy,A.cy,oy,A.t,A.b,B.t,B.b); d=`M${f(R?A.r+g1:A.l-g1)},${f(y)} H${f(R?B.l-g2:B.r+g2)}`; }
+      else if(r==='v'){ const x=pick(B.cx,A.cx,ox,A.l,A.r,B.l,B.r); d=`M${f(x)},${f(D?A.b+g1:A.t-g1)} V${f(D?B.t-g2:B.b+g2)}`; }
+      else if(r==='hv') d=`M${f(R?A.r+g1:A.l-g1)},${f(A.cy)} H${f(B.cx)} V${f(D?B.t-g2:B.b+g2)}`;
+      else if(r==='vh') d=`M${f(A.cx)},${f(D?A.b+g1:A.t-g1)} V${f(B.cy)} H${f(R?B.l-g2:B.r+g2)}`;
+      else if(r==='hvh'){ const x=mid!==null?mid:(R?(A.r+B.l)/2:(A.l+B.r)/2);
+        d=`M${f(x>A.cx?A.r+g1:A.l-g1)},${f(A.cy)} H${f(x)} V${f(B.cy)} H${f(x>B.cx?B.r+g2:B.l-g2)}`; }
+      else if(r==='vhv'){ const y=mid!==null?mid:(D?(A.b+B.t)/2:(A.t+B.b)/2);
+        d=`M${f(A.cx)},${f(y>A.cy?A.b+g1:A.t-g1)} V${f(y)} H${f(B.cx)} V${f(y>B.cy?B.b+g2:B.t-g2)}`; }
+      else { const dx=B.cx-A.cx, dy=B.cy-A.cy, L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L;
+        const edge=b=>Math.min(ux?(b.r-b.l)/2/Math.abs(ux):1e9, uy?(b.b-b.t)/2/Math.abs(uy):1e9);
+        const s0=edge(A)+g1, s1=L-edge(B)-g2;
+        d=`M${f(A.cx+ux*s0)},${f(A.cy+uy*s0)} L${f(A.cx+ux*s1)},${f(A.cy+uy*s1)}`; }
+      p.setAttribute('d',d); if(!p.hasAttribute('fill')) p.setAttribute('fill','none');
+    });
+  }
+  window.deckShow=show;   // check_arrows.py 逐页检查时用
+  // ---- 分步动画：PH 的每一项是那一步要点亮的 data-a 名字。没有动画页就把这段连同 startAnim 调用一起删掉 ----
+  
+  let anim=null;
+  function startAnim(sl){
+    anim=null; const svg=sl.querySelector('svg[data-anim]'); if(!svg) return; const PH=JSON.parse(svg.dataset.ph);
+    const steps=[...sl.querySelectorAll('.step-item')];
+    const fixed=(location.search.match(/[?&]anim=(\d)/)||[])[1];
+    let k=fixed!==undefined?parseInt(fixed,10):0;
+    function apply(){ const on=new Set(PH[k]); svg.querySelectorAll('[data-a]').forEach(el=>el.classList.toggle('on',on.has(el.dataset.a))); steps.forEach((st,i)=>st.classList.toggle('cur',i===k)); }
+    apply();
+    anim={ next(){ k=(k+1)%PH.length; apply(); }, prev(){ k=(k-1+PH.length)%PH.length; apply(); } };
+  }
+  const navBtn=document.getElementById('nav-btn'), panel=document.getElementById('nav-panel'), pg=document.getElementById('nb-pg');
+  (function buildNav(){
+    let html='', lastSec=null;
+    slides.forEach((sl,k)=>{
+      const sec=sl.dataset.sec||''; const h=sl.querySelector('h1');
+      let title=sl.dataset.title||(h?h.textContent.trim():''); if(!title) title=sec;
+      if(sec!==lastSec){ html+=`<div class="sec-title">${sec||'—'}</div>`; lastSec=sec; }
+      html+=`<div class="it" data-k="${k}"><span class="k">${k+1}</span><span>${title}</span></div>`;
+    });
+    panel.innerHTML=html;
+  })();
+  function toggleNav(force){ const on=(force===undefined)?!panel.classList.contains('open'):force; panel.classList.toggle('open',on); navBtn.classList.toggle('open',on); }
+  document.getElementById('nb-list').addEventListener('click',e=>{ e.stopPropagation(); toggleNav(); });
+  document.getElementById('nb-prev').addEventListener('click',e=>{ e.stopPropagation(); prev(); });
+  document.getElementById('nb-next').addEventListener('click',e=>{ e.stopPropagation(); next(); });
+  navBtn.addEventListener('click',e=>{ e.stopPropagation(); });
+  panel.addEventListener('click',e=>{ e.stopPropagation(); const it=e.target.closest('.it'); if(!it) return; show(parseInt(it.dataset.k,10)); toggleNav(false); });
+  function updateHud(){ pg.textContent=`${cur+1} / ${slides.length}`; hud.textContent = showCounter ? `${cur+1} / ${slides.length}` : '← → 翻页 · F 全屏 · C 页码 · 左上角选页'; panel.querySelectorAll('.it').forEach((el,k)=>el.classList.toggle('cur',k===cur)); }
+  function next(){ show(cur+1); } function prev(){ show(cur-1); }
+  let buf='', bt=null;
+  addEventListener('keydown',e=>{
+    if(['ArrowRight','ArrowDown','PageDown',' ','Enter'].includes(e.key)){ e.preventDefault(); next(); }
+    else if(['ArrowLeft','ArrowUp','PageUp','Backspace'].includes(e.key)){ e.preventDefault(); prev(); }
+    else if(e.key==='Escape'){ toggleNav(false); }
+    else if(e.key==='j'||e.key==='J'){ if(anim) anim.next(); }
+    else if(e.key==='k'||e.key==='K'){ if(anim) anim.prev(); }
+    else if(e.key==='g'||e.key==='G'){ toggleNav(); }
+    else if(e.key==='Home'){ show(0); } else if(e.key==='End'){ show(slides.length-1); }
+    else if(e.key==='f'||e.key==='F'){ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(()=>{}); }
+    else if(e.key==='c'||e.key==='C'){ showCounter=!showCounter; hud.classList.toggle('show',showCounter); updateHud(); }
+    else if(/^[0-9]$/.test(e.key)){ buf=(buf+e.key).slice(-2); clearTimeout(bt); bt=setTimeout(()=>{ const k=parseInt(buf,10); if(k>=1&&k<=slides.length) show(k-1); buf=''; },500); }
+  });
+  document.querySelectorAll('[data-pageof]').forEach(e=>{ const k=slides.findIndex(sl=>sl.dataset.title===e.dataset.pageof); e.textContent=k>=0?k+1:'?'; if(k<0) console.warn('data-pageof 找不到页：',e.dataset.pageof); });
+  // 页内跳转：data-goto 写目标页的 data-title，插页后不会指错
+  document.addEventListener('click',e=>{ const g=e.target.closest('[data-goto]'); if(!g) return; e.stopPropagation(); const k=slides.findIndex(sl=>sl.dataset.title===g.dataset.goto); if(k>=0) show(k); },true);
+  addEventListener('hashchange',()=>{ const k=parseInt(location.hash.slice(1),10); if(!isNaN(k)) show(k-1); });
+  // 点页面不翻页（误触会跳页）；只用来收起展开的页面列表
+  addEventListener('click',e=>{ if(e.target.closest('#nav-panel,#nav-btn,#nav-hot')) return; toggleNav(false); });
+  addEventListener('resize',fit); fit();
+  const h=parseInt((location.hash||'#1').slice(1),10); show(isNaN(h)?0:h-1);
+  if(document.fonts) document.fonts.ready.then(()=>{ if(cur>=0) layoutArrows(slides[cur]); });   // 块 id 挂在带文字的 <g> 上时，字体到位后重算
+  if(/[?&]nav=1/.test(location.search)) toggleNav(true);
+  hud.classList.add('show'); setTimeout(()=>{ if(!showCounter) hud.classList.remove('show'); },4000);
+})();
+</script>
+</body>
+</html>
