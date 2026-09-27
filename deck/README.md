@@ -7,3 +7,6 @@
 
 - `src/`：`head.html`、`stage.html`、`practice.html`（正文）、`tail.html`，改完跑 `./build.sh` 重新拼出 `practice.html`。
 - `media/`：deck 用到的图，由本仓库的实验结果画出，不含任何模型权重。
+
+每一页对应仓库里的哪个脚本、哪份结果文件，见仓库根目录 README 的「讲义页 → 脚本 → 结果文件」表。
+第 4 页（张量流程图）和第 7 页（LoRA 结构图）是静态图，仓库不提供生成脚本。
