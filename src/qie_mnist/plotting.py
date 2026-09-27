@@ -1,4 +1,4 @@
-"""Shared matplotlib style for the figure scripts (white background, one accent colour, CJK-capable fonts)."""
+"""画图脚本共用的 matplotlib 风格：白底、单一强调色、中文字体（与讲义 deck/media 里的图一致）。"""
 from __future__ import annotations
 
 from pathlib import Path
