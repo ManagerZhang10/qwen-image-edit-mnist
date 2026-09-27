@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Train the small MNIST CNN used for scoring (CPU, ~1-2 min). The repo already ships the result at
-src/qie_mnist/assets/mnist_cls.pt; rerun this only to regenerate it.
+"""评测用的小 MNIST 分类器（讲义第 12 页「成功率怎么算」里的分类器，测试集准确率 98.8%）。CPU 约 1–2 分钟。
+
+仓库已附带训练好的 src/qie_mnist/assets/mnist_cls.pt，只有想重新生成时才需要跑。
 
 Usage: python scripts/train_classifier.py [--out src/qie_mnist/assets/mnist_cls.pt] [--mnist-root data]
 """

@@ -613,6 +613,14 @@ def parse_args(input_args=None):
         default=1.29,
         help="Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`.",
     )
+    # [qie-mnist patch 5/5, part 1] Optional train-time sigma shift (experiment E). 1.0 = off = upstream behaviour.
+    parser.add_argument(
+        "--train_shift",
+        type=float,
+        default=1.0,
+        help="Shift each sampled training sigma toward high noise: sigma' = s*sigma / (1 + (s-1)*sigma), the same map"
+        " the sampler uses. 1.0 (default) keeps the upstream sampling.",
+    )
     parser.add_argument(
         "--optimizer",
         type=str,
@@ -1910,6 +1918,11 @@ def main(args):
                 # Add noise according to flow matching.
                 # zt = (1 - texp) * x + texp * z1
                 sigmas = get_sigmas(timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
+                # [qie-mnist patch 5/5, part 2] --train_shift s != 1: sigma' = s*sigma / (1 + (s-1)*sigma).
+                # The timestep fed to the transformer follows the shifted sigma.
+                if args.train_shift != 1.0:
+                    sigmas = args.train_shift * sigmas / (1 + (args.train_shift - 1) * sigmas)
+                    timesteps = sigmas.flatten().float() * noise_scheduler_copy.config.num_train_timesteps
                 noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
 
                 # Predict the noise residual. A batch is single-bucket, so the latent height/width are shared

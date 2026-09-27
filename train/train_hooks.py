@@ -1,8 +1,12 @@
-"""Logging / evaluation hooks for the vendored diffusers Qwen-Image 2.1 img2img LoRA trainer.
+"""训练挂钩：给 vendored 的 diffusers Qwen-Image 2.1 img2img LoRA 训练脚本加日志、固定测试集 probe 和验证。
+
+讲义：第 8 页「训练 loss」（train.jsonl）、第 9 页「按 σ 看 loss」（probe.jsonl）、
+第 13 页「成功率」和第 14 页「训练前后对照」（val.jsonl、val/step_*/）。
 
 The trainer (train_dreambooth_lora_qwenimage21_img2img.py, diffusers e0abab8) calls into this module at four
 marked points ("[qie-mnist hook n/4]"). Nothing here changes what is trained: the hooks only read the model,
-in eval mode under torch.no_grad, and write logs / images / LoRA files.
+in eval mode under torch.no_grad, and write logs / images / LoRA files. (The trainer's only training change,
+the optional --train_shift, is patch 5 in the trainer itself.)
 
   prepare()         encode the fixed test set once, while the text encoder and VAE are loaded
   log_train_step()  one JSON line per optimizer step: loss, lr, sampled sigma          -> train.jsonl
@@ -16,6 +20,9 @@ Environment variables (set by scripts/train_lora.sh):
   HOOK_OUT            output dir for logs and images (default <output_dir>/hook_logs)
   HOOK_N_VAL (16)     test pairs per task         HOOK_N_GRID (2)  grid examples per task
   HOOK_VAL_EVERY (200)  HOOK_PROBE_EVERY (50)  HOOK_CKPT_EVERY (500)
+  HOOK_NEXT_TARGET    random | proto: next targets of the fixed test set; must match the training data
+                      (train_lora.sh reads it from DATA_DIR/summary.json). The test inputs are the same either way.
+  HOOK_DATA_SUMMARY   the training data's summary.json (only copied into meta.json / FINAL.json)
 """
 import json
 import os
@@ -45,6 +52,15 @@ def _append(name, rec):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def _data_summary():
+    p = os.environ.get("HOOK_DATA_SUMMARY", "")
+    if p and os.path.exists(p):
+        with open(p) as f:
+            d = json.load(f)
+        return {k: d.get(k) for k in ("n", "n_per_task", "tasks", "next_target", "per_task", "seed")}
+    return None
+
+
 def prepare(args, accelerator, text_encoding_pipeline, compute_text_embeddings, vae, latents_mean, latents_std,
             processor, weight_dtype, validation_pipeline_cls, noise_scheduler):
     from diffusers.training_utils import offload_models
@@ -52,12 +68,13 @@ def prepare(args, accelerator, text_encoding_pipeline, compute_text_embeddings, 
     S.update(out=os.environ.get("HOOK_OUT", os.path.join(args.output_dir, "hook_logs")),
              n_val=_env("HOOK_N_VAL", 16), n_grid=_env("HOOK_N_GRID", 2),
              val_every=_env("HOOK_VAL_EVERY", 200), probe_every=_env("HOOK_PROBE_EVERY", 50),
-             ckpt_every=_env("HOOK_CKPT_EVERY", 500),
+             ckpt_every=_env("HOOK_CKPT_EVERY", 500), next_target=os.environ.get("HOOK_NEXT_TARGET", "random"),
+             data_summary=_data_summary(),
              device=accelerator.device, dtype=weight_dtype, args=args, processor=processor,
              pipe_cls=validation_pipeline_cls, pipe=None, t_start=time.time(), train_buf=[])
     os.makedirs(os.path.join(S["out"], "val"), exist_ok=True)
 
-    samples = D.make_pairs("test", S["n_val"])
+    samples = D.make_pairs("test", S["n_val"], next_target=S["next_target"])
     S["samples"] = samples
     dev = accelerator.device
     t0 = time.time()
@@ -85,6 +102,8 @@ def prepare(args, accelerator, text_encoding_pipeline, compute_text_embeddings, 
     S["grid"] = grid
     meta = dict(n_val=len(samples), tasks=D.TASK_LIST, grid=grid, probe_sigmas=PROBE_SIGMAS,
                 val_every=S["val_every"], probe_every=S["probe_every"], ckpt_every=S["ckpt_every"],
+                test_next_target=S["next_target"], train_data=S["data_summary"],
+                train_shift=float(getattr(args, "train_shift", 1.0)),
                 samples=[dict(i=i, task=s["task"], prompt=s["prompt"], src_label=s["src_label"],
                               want_label=s["want_label"], seed=1000 + i) for i, s in enumerate(samples)],
                 args={k: (v if isinstance(v, (int, float, str, bool, type(None))) else str(v))
@@ -189,15 +208,22 @@ def _save_ckpt(step, transformer, final):
         marker = dict(checkpoint=f"ckpt-{step}/", weight_file="pytorch_lora_weights.safetensors", step=int(step),
                       base_model="Qwen/Qwen-Image-2.1 rev 790c92633540aa0cb11d9abf19eb46d861714758",
                       diffusers_commit="e0abab83b5df05de9e7abd788643c1a7c1e42e28",
-                      trainer="train/train_dreambooth_lora_qwenimage21_img2img.py (+4 logging hooks)",
+                      trainer="train/train_dreambooth_lora_qwenimage21_img2img.py (+4 logging hooks, +--train_shift)",
                       load="pipe.load_lora_weights('<output_dir>/ckpt-<step>')",
-                      sigma_sampling="weighting_scheme=none: sigma ~ U(0,1) at train time, no shift "
-                                     "(scheduler use_dynamic_shifting; shift applied only at sampling)",
-                      hyperparameters={k: getattr(args, k, None) for k in keys},
-                      data="qie_mnist.make_pairs('train', 500) -> 2000 pairs, 4 tasks",
+                      sigma_sampling=_sigma_desc(float(getattr(args, "train_shift", 1.0))),
+                      hyperparameters={k: getattr(args, k, None) for k in keys + ["train_shift"]},
+                      data=S["data_summary"] or "unknown (no HOOK_DATA_SUMMARY)",
+                      test_next_target=S["next_target"],
                       written_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         with open(os.path.join(args.output_dir, "FINAL.json"), "w") as f:
             json.dump(marker, f, ensure_ascii=False, indent=1)
+
+
+def _sigma_desc(shift):
+    if shift == 1.0:
+        return ("weighting_scheme=none: sigma ~ U(0,1) at train time, no shift "
+                "(scheduler use_dynamic_shifting; shift applied only at sampling)")
+    return f"sigma ~ U(0,1) then train-time shift s={shift:g}: s*sigma/(1+(s-1)*sigma)"
 
 
 def on_step(step, transformer, args):

@@ -1,4 +1,6 @@
-"""Scoring for the MNIST editing tasks.
+"""评测：编辑成功率和像素 IoU（讲义第 12 页「成功率怎么算」）。训练验证、推理扫描、画图都用这一份。
+
+Scoring for the MNIST editing tasks.
 
 The edited output is resized back to 28x28 grayscale, the edit is undone (rotate back / invert back) and a
 small CNN classifies the result. Success = predicted label equals the expected label. Deterministic tasks
