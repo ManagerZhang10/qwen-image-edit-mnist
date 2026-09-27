@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+.env
+.env.*
+# MNIST cache, model snapshots, training / inference outputs
+data/
+models/
+outputs/
+runs/
+# weights of any kind (the only exception is the tiny self-trained MNIST classifier)
+*.safetensors
+*.bin
+*.ckpt
+*.pt
+!src/qie_mnist/assets/mnist_cls.pt

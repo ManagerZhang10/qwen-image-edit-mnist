@@ -1,0 +1,49 @@
+--- a/examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
++++ b/examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
+@@ -1725,6 +1725,24 @@
+         assert all(embeds is not None for embeds in prompt_embeds_cache), (
+             "Prompt embedding cache has unfilled entries."
+         )
++
++    # [qie-mnist hook 1/4] Encode the fixed test set (prompts + condition images, probe latents) while the text
++    # encoder and VAE are still loaded. See train/train_hooks.py.
++    import train_hooks
++
++    train_hooks.prepare(
++        args=args,
++        accelerator=accelerator,
++        text_encoding_pipeline=text_encoding_pipeline,
++        compute_text_embeddings=compute_text_embeddings,
++        vae=vae,
++        latents_mean=latents_mean,
++        latents_std=latents_std,
++        processor=processor,
++        weight_dtype=weight_dtype,
++        validation_pipeline_cls=QwenImage21ValidationPipeline,
++        noise_scheduler=noise_scheduler_copy,
++    )
+ 
+     # move back to cpu before deleting to ensure memory is freed see: https://github.com/huggingface/diffusers/issues/11376#issue-3008144624
+     if args.cache_latents:
+@@ -1831,6 +1849,9 @@
+         while len(sigma.shape) < n_dim:
+             sigma = sigma.unsqueeze(-1)
+         return sigma
++
++    # [qie-mnist hook 2/4] Step-0 evaluation: the adapter's B matrices start at zero, so this is the base model.
++    train_hooks.on_step(global_step, unwrap_model(transformer), args)
+ 
+     for epoch in range(first_epoch, args.num_train_epochs):
+         transformer.train()
+@@ -2021,6 +2042,11 @@
+             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+             progress_bar.set_postfix(**logs)
+             accelerator.log(logs, step=global_step)
++            # [qie-mnist hook 3/4] Per-step record with the sampled sigma, for the per-sigma-bin loss plot.
++            train_hooks.log_train_step(global_step, logs, sigmas)
++            # [qie-mnist hook 4/4] Periodic held-out probe loss / validation / LoRA snapshot.
++            if accelerator.sync_gradients:
++                train_hooks.on_step(global_step, unwrap_model(transformer), args)
+ 
+             if global_step >= args.max_train_steps:
+                 break

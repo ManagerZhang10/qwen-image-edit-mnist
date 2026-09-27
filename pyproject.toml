@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qie-mnist"
+version = "0.1.0"
+description = "Qwen-Image 2.1 x MNIST: a small, fully reproducible image-editing LoRA practice experiment"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Yu Zhang" }]
+requires-python = ">=3.10"
+# Versions actually used for the reported runs (see README "Environment"). Only diffusers must be at the exact
+# commit: QwenImage21Pipeline / AutoencoderKLQwenImage21 are not in a diffusers release at that commit.
+dependencies = [
+    "diffusers @ https://github.com/huggingface/diffusers/archive/e0abab83b5df05de9e7abd788643c1a7c1e42e28.zip",
+    "torch>=2.11",
+    "torchvision>=0.26",
+    "transformers==5.17.0",
+    "accelerate==1.15.0",
+    "peft==0.21.0",
+    "datasets==5.0.1",
+    "pyarrow==25.0.1",
+    "huggingface-hub==1.32.0",
+    "tokenizers==0.23.2",
+    "safetensors==0.8.0",
+    "numpy",
+    "pillow",
+    "matplotlib",
+    "tensorboard",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+qie_mnist = ["assets/*.pt"]

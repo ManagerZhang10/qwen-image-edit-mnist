@@ -1,0 +1,51 @@
+qwen-image-edit-mnist
+Copyright 2026 Yu Zhang
+
+This project is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+-------------------------------------------------------------------------------
+Third-party code: Hugging Face diffusers
+-------------------------------------------------------------------------------
+
+train/train_dreambooth_lora_qwenimage21_img2img.py is a copy of
+
+  https://github.com/huggingface/diffusers
+  path:   examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
+  commit: e0abab83b5df05de9e7abd788643c1a7c1e42e28
+
+Copyright 2025 The HuggingFace Inc. team. Licensed under the Apache License,
+Version 2.0. The upstream license header is kept verbatim at the top of the file
+(the upstream header itself ends at "...governing permissions and"; it was not
+edited here).
+
+Modifications (the only changes to the upstream file; full diff in
+train/hooks.patch, 4 call sites, no change to the training logic):
+
+  1. After the prompt-embedding cache is filled, and before the text encoder
+     and VAE are freed: `train_hooks.prepare(...)` encodes a fixed held-out test
+     set (prompt embeddings, target / condition latents, fixed noise).
+  2. Before the training loop: `train_hooks.on_step(0, ...)` evaluates the base
+     model (the LoRA B matrices start at zero).
+  3. After every optimizer step: `train_hooks.log_train_step(...)` appends loss,
+     lr and the sampled sigma to train.jsonl.
+  4. After every optimizer step: `train_hooks.on_step(step, ...)` runs the
+     periodic held-out probe loss, validation sampling, and LoRA snapshot.
+
+The hooks live in train/train_hooks.py (original code of this project). They only
+read the model in eval mode under torch.no_grad and write logs / images / LoRA files.
+
+-------------------------------------------------------------------------------
+Model weights (NOT included)
+-------------------------------------------------------------------------------
+
+This repository does not contain or redistribute any model weights. The base
+model Qwen/Qwen-Image-2.1 is distributed by its authors on Hugging Face under
+its own license (qwen-research license), which is NOT Apache-2.0. Users must
+read and accept that license before downloading the weights.
+
+-------------------------------------------------------------------------------
+Data
+-------------------------------------------------------------------------------
+
+MNIST (Y. LeCun, C. Cortes, C. J. C. Burges) is downloaded at runtime through
+torchvision; it is not included in this repository.
